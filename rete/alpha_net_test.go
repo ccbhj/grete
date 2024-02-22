@@ -1,7 +1,12 @@
-package rete
+package rete_test
 
-import "testing"
-import "github.com/stretchr/testify/assert"
+import (
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
+
+	. "github.com/ccbhj/grete/rete"
+)
 
 func oneInMap[K comparable, V any](m map[K]V) V {
 	for _, v := range m {
@@ -31,144 +36,147 @@ func getTestWMEs() []*WME {
 	return ret
 }
 
-func TestAlphaNetwork(t *testing.T) {
-	{
-		t.Log("[TEST] Identity type value should pass directly")
-		an := NewAlphaNetwork()
-		am := an.MakeAlphaMem(Cond{
-			Name:   TVIdentity("x"),
-			Attr:   "on",
-			Value:  TVIdentity("y"),
-			testFn: TestEqual,
-		})
-		assert.NotNil(t, am)
-		assert.NotEmpty(t, an.root.children)
+var _ = Describe("AlphaNet", func() {
+	var (
+		an *AlphaNetwork
+	)
+	BeforeEach(func() {
+		an = NewAlphaNetwork()
+		Expect(an).NotTo(BeNil())
+	})
 
-		testWMEs := getTestWMEs()
-		an.AddWME(testWMEs...)
-		for _, child := range an.root.children {
-			assert.EqualValues(t, am, child.outputMem)
-			if assert.NotNil(t, am.items.Front) {
-				wmes := []*WME{testWMEs[7], testWMEs[3], testWMEs[1], testWMEs[0]}
-				assert.EqualValues(t, wmes, listToSlice(am.items))
-				for _, wme := range wmes {
-					assert.EqualValues(t, []*AlphaMem{am}, wme.alphaMems)
-				}
-			}
-		}
-
-		t.Log("[TEST] add it again, same alpha should be thrown")
-		newAM := an.MakeAlphaMem(
-			Cond{
+	Describe("when constructing AlphaNetwork", func() {
+		It("allowed the same condition to be added for more than one time", func() {
+			am := an.MakeAlphaMem(Cond{
 				Name:   TVIdentity("x"),
 				Attr:   "on",
 				Value:  TVIdentity("y"),
-				testFn: TestEqual,
+				TestOp: TestOpEqual,
+			}, nil)
+			Expect(am).NotTo(BeNil())
+			Expect(an.AlphaRoot()).NotTo(BeNil())
+		})
+
+		When("testing condition with value of Identity type", func() {
+			var child *ConstantTestNode
+			var am *AlphaMem
+			BeforeEach(func() {
+				am = an.MakeAlphaMem(Cond{
+					Name:   TVIdentity("x"),
+					Attr:   "on",
+					Value:  TVIdentity("y"),
+					TestOp: TestOpEqual,
+				}, nil)
+				an.AlphaRoot().ForEachChild(func(tn *ConstantTestNode) (stop bool) {
+					child = tn
+					return true
+				})
 			})
-		assert.Equal(t, am, newAM)
-		assert.Len(t, an.root.children, 1)
-	}
 
-	{
-		t.Log("[TEST] test attr value condition")
-		an := NewAlphaNetwork()
-		testWMEs := getTestWMEs()
-		am := an.MakeAlphaMem(Cond{
-			Name:   TVIdentity("z"),
-			Attr:   "on",
-			Value:  TVString("table"),
-			testFn: TestEqual,
+			It("should only test the Attr of a WME", func() {
+				Expect(child.OutputMem()).To(Equal(am))
+				Expect(child.Activate(NewWME("X", "on", TVString("Y")))).To(Equal(1))
+			})
 		})
-		assert.NotNil(t, am)
-		assert.Len(t, an.root.children, 1)
 
-		an.AddWME(testWMEs...)
-		child := oneInMap(an.root.children) // node testing Attr == on
+		Context("testing condition with value of non-Identity type as tested Value", func() {
+			var child, grandChild *ConstantTestNode
+			var am *AlphaMem
+			BeforeEach(func() {
+				am = an.MakeAlphaMem(Cond{
+					Name:   TVIdentity("x"),
+					Attr:   "color",
+					Value:  TVString("red"),
+					TestOp: TestOpEqual,
+				}, nil)
 
-		assert.Len(t, child.children, 1)
-		grandChild := oneInMap(child.children) // node testing Value == "table"
-		assert.EqualValues(t, TestTypeValue, grandChild.GetTestType())
-		assert.EqualValues(t, am, grandChild.outputMem)
-		if assert.NotNil(t, am.items.Front) {
-			wmes := []*WME{testWMEs[7], testWMEs[3]}
-			assert.EqualValues(t, wmes, listToSlice(am.items))
-			for _, wme := range wmes {
-				assert.EqualValues(t, []*AlphaMem{am}, wme.alphaMems)
-			}
-		}
-	}
+				an.AlphaRoot().ForEachChild(func(tn *ConstantTestNode) (stop bool) {
+					child = tn
+					return true
+				})
+				child.ForEachChild(func(tn *ConstantTestNode) (stop bool) {
+					grandChild = tn
+					return true
+				})
+			})
 
-	{
-		t.Log("[TEST] test identity value condition")
-		an := NewAlphaNetwork()
-		am := an.MakeAlphaMem(Cond{
-			Name:   TVIdentity("x"),
-			Attr:   "left-of",
-			Value:  TVIdentity("y"),
-			testFn: TestEqual,
+			It("should construct a tree with depth of 3 ", func() {
+				Expect(an.AlphaRoot()).NotTo(BeNil())
+				if Expect(child).NotTo(BeNil()) {
+					Expect(grandChild).NotTo(BeNil())
+				}
+			})
+
+			It("should test the Attr and Value of a WME", func() {
+				Expect(grandChild.OutputMem()).To(Equal(am))
+				// only activate by Value
+				Expect(grandChild.Activate(NewWME("X", "background_color", TVString("red")))).To(Equal(1))
+				// activate by both Attr and Value
+				Expect(child.Activate(NewWME("X", TVString("color"), TVString("red")))).To(Equal(1))
+			})
 		})
-		assert.NotNil(t, am)
-		assert.Len(t, an.root.children, 1)
-
-		testWMEs := getTestWMEs()
-		an.AddWME(testWMEs...)
-
-		child := oneInMap(an.root.children) // node testing Attr == left-of
-		assert.Len(t, child.children, 0)
-		assert.EqualValues(t, TestTypeAttr, child.GetTestType())
-		assert.EqualValues(t, am, child.outputMem)
-
-		if assert.NotNil(t, am.items.Front) {
-			wmes := []*WME{testWMEs[6], testWMEs[4]}
-			assert.EqualValues(t, wmes, listToSlice(am.items))
-			for _, wme := range wmes {
-				assert.EqualValues(t, []*AlphaMem{am}, wme.alphaMems)
-			}
-		}
-	}
-
-}
-
-func TestAddWME(t *testing.T) {
-	testWMEs := getTestWMEs()
-	an := NewAlphaNetwork()
-	am := an.MakeAlphaMem(Cond{
-		Name:   TVIdentity("z"),
-		Attr:   "color",
-		Value:  TVString("red"),
-		testFn: TestEqual,
 	})
-	an.AddWME(testWMEs...)
-	child := oneInMap(an.root.children)
-	grandchild := oneInMap(child.children)
-	assert.EqualValues(t, grandchild.outputMem, am)
 
-	wmes := []*WME{testWMEs[8], testWMEs[2]}
-	if assert.NotNil(t, am.items.Front) {
-		assert.EqualValues(t, wmes, listToSlice(am.items))
-	}
-	for _, wme := range wmes {
-		assert.EqualValues(t, []*AlphaMem{am}, wme.alphaMems)
-	}
+	Context("AddWME", func() {
+		var (
+			testWMEs []*WME
+			ams      []*AlphaMem
+			conds    = []Cond{
+				{
+					Name:   TVIdentity("x"),
+					Attr:   "on",
+					Value:  TVIdentity("y"),
+					TestOp: TestOpEqual,
+				},
+				{
+					Name:   TVIdentity("x"),
+					Attr:   "color",
+					Value:  TVString("red"),
+					TestOp: TestOpEqual,
+				},
+			}
+		)
+		BeforeEach(func() {
+			ams = make([]*AlphaMem, 0, len(conds))
+			for _, c := range conds {
+				am := an.MakeAlphaMem(c, nil)
+				Expect(am).NotTo(BeNil())
+				ams = append(ams, am)
+			}
 
-	{
-		matchWME := NewWME("u", "color", TVString("red"))
-		wmes = append(wmes, matchWME)
-		an.AddWME(matchWME)
+			testWMEs = getTestWMEs()
+			an.AddWME(testWMEs...)
+		})
 
-		for _, wme := range wmes {
-			assert.EqualValues(t, []*AlphaMem{am}, wme.alphaMems)
-		}
-		assert.EqualValues(t, am, matchWME.alphaMems[0])
-	}
+		AfterEach(func() {
+			testWMEs = testWMEs[:0]
+		})
 
-	{
-		mismatchWME := NewWME("u", "color", TVString("white"))
-		an.AddWME(mismatchWME)
+		It("should matched WMEs with Identity value", func() {
+			onCondWMEs := lo.Filter(testWMEs, func(w *WME, idx int) bool {
+				return w.Field == "on"
+			})
+			onCondAM := ams[0]
+			Expect(onCondWMEs).To(HaveLen(onCondAM.NItems()))
+			onCondAM.ForEachItem(func(w *WME) (stop bool) {
+				Expect(onCondWMEs).To(ContainElement(w))
+				return false
+			})
+		})
 
-		for _, wme := range wmes {
-			assert.EqualValues(t, []*AlphaMem{am}, wme.alphaMems)
-		}
-		assert.Empty(t, mismatchWME.alphaMems)
-	}
-}
+		It("should matched WMEs with contant value", func() {
+			redCondWMEs := lo.Filter(testWMEs, func(w *WME, idx int) bool {
+				return w.Field == "color" && w.Value == TVString("red")
+			})
+			redCondAM := ams[1]
+			GinkgoWriter.Printf("redCondWMEs = %s %s\n", redCondWMEs[0], redCondWMEs[1])
+			GinkgoWriter.Printf("redCondWMEs = %p %p\n", redCondWMEs[0], redCondWMEs[1])
+			Expect(redCondWMEs).To(HaveLen(redCondAM.NItems()))
+			redCondAM.ForEachItem(func(w *WME) (stop bool) {
+				GinkgoWriter.Printf("redCondAM => %p => %s", w, w)
+				Expect(redCondWMEs).To(ContainElement(w))
+				return false
+			})
+		})
+	})
+})

@@ -7,9 +7,10 @@ type (
 		Parent() ReteNode
 		AddChild(children ...ReteNode)
 		AnyChild() bool
+		ClearAndRestoreChildren(fn func())
 		DetachParent()
-		ForEachChild(fn func(ReteNode) (stop bool))
-		ForEachChildNonStop(fn func(ReteNode))
+		ForEachChild(fn func(child ReteNode) (stop bool))
+		ForEachChildNonStop(fn func(child ReteNode))
 	}
 
 	reteNode struct {
@@ -20,7 +21,8 @@ type (
 
 func NewReteNode(parent ReteNode, self ReteNode) ReteNode {
 	node := &reteNode{
-		parent: parent,
+		parent:   parent,
+		children: list.New[ReteNode](),
 	}
 	if parent != nil {
 		parent.AddChild(self)
@@ -37,7 +39,7 @@ func (n *reteNode) AddChild(children ...ReteNode) {
 }
 
 func (n *reteNode) AnyChild() bool {
-	return isListEmpty(n.children)
+	return !isListEmpty(n.children)
 }
 
 func (n *reteNode) ForEachChild(fn func(ReteNode) (stop bool)) {
@@ -64,4 +66,12 @@ func (r *reteNode) RemoveChild(child ReteNode) {
 		func(x ReteNode) bool { return x == child }) {
 		child.DetachParent()
 	}
+}
+
+func (r *reteNode) ClearAndRestoreChildren(fn func()) {
+	savedListOfChild := r.children
+	l := list.New[ReteNode]()
+	r.children = l
+	fn()
+	r.children = savedListOfChild
 }

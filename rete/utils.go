@@ -1,21 +1,8 @@
 package rete
 
-import "github.com/zyedidia/generic/list"
-
-const GoldenRatio32 uint32 = 0x61C88647 // phi = (sqrt(5)-1)/2
-
-func hash32(v uint32) uint32 {
-	return uint32(v) * GoldenRatio32
-}
-
-func hash64(v uint64) uint32 {
-	return hash32(uint32(v) ^ hash32(uint32(v>>32)))
-}
-
-func hashCombine(x, y uint32) uint32 {
-	return hash32(hash32(x) ^ hash32(y))
-}
-
+import (
+	"github.com/zyedidia/generic/list"
+)
 func isListEmpty[T any](l *list.List[T]) bool {
 	return l == nil || (l.Back == nil && l.Front == nil)
 }
@@ -54,4 +41,8 @@ func listToSlice[T any](l *list.List[T]) []T {
 	})
 
 	return arr
+}
+
+func isIdentity(tv TestValue) bool {
+	return tv.Type() == TestValueTypeIdentity
 }
