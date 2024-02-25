@@ -1,11 +1,13 @@
 package rete_test
 
 import (
+	"fmt"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
 
-	. "github.com/ccbhj/grete/rete"
+	. "github.com/ccbhj/grete/internal/rete"
 )
 
 func oneInMap[K comparable, V any](m map[K]V) V {
@@ -45,16 +47,34 @@ var _ = Describe("AlphaNet", func() {
 		Expect(an).NotTo(BeNil())
 	})
 
-	Describe("when constructing AlphaNetwork", func() {
+	Describe("constructing AlphaNetwork", func() {
 		It("allowed the same condition to be added for more than one time", func() {
 			am := an.MakeAlphaMem(Cond{
-				Name:   TVIdentity("x"),
+				ID:     TVIdentity("x"),
 				Attr:   "on",
-				Value:  TVIdentity("y"),
+				Value:  TVString("y"),
 				TestOp: TestOpEqual,
 			}, nil)
 			Expect(am).NotTo(BeNil())
 			Expect(an.AlphaRoot()).NotTo(BeNil())
+		})
+
+		It("allowed the conditions with same Attr but different Values that are an Identity to generate same AlphaMem", func() {
+			am0 := an.MakeAlphaMem(Cond{
+				ID:     TVIdentity("x"),
+				Attr:   "on",
+				Value:  TVIdentity("y"),
+				TestOp: TestOpEqual,
+			}, nil)
+			Expect(am0).NotTo(BeNil())
+			am1 := an.MakeAlphaMem(Cond{
+				ID:     TVIdentity("x"),
+				Attr:   "on",
+				Value:  TVIdentity("z"),
+				TestOp: TestOpEqual,
+			}, nil)
+			Expect(am1).NotTo(BeNil())
+			Expect(fmt.Sprintf("%p", am0)).To(BeEquivalentTo(fmt.Sprintf("%p", am1)))
 		})
 
 		When("testing condition with value of Identity type", func() {
@@ -62,7 +82,7 @@ var _ = Describe("AlphaNet", func() {
 			var am *AlphaMem
 			BeforeEach(func() {
 				am = an.MakeAlphaMem(Cond{
-					Name:   TVIdentity("x"),
+					ID:     TVIdentity("x"),
 					Attr:   "on",
 					Value:  TVIdentity("y"),
 					TestOp: TestOpEqual,
@@ -84,7 +104,7 @@ var _ = Describe("AlphaNet", func() {
 			var am *AlphaMem
 			BeforeEach(func() {
 				am = an.MakeAlphaMem(Cond{
-					Name:   TVIdentity("x"),
+					ID:     TVIdentity("x"),
 					Attr:   "color",
 					Value:  TVString("red"),
 					TestOp: TestOpEqual,
@@ -117,25 +137,26 @@ var _ = Describe("AlphaNet", func() {
 		})
 	})
 
-	Context("AddWME", func() {
+	Describe("AddWME", func() {
 		var (
 			testWMEs []*WME
 			ams      []*AlphaMem
 			conds    = []Cond{
 				{
-					Name:   TVIdentity("x"),
+					ID:     TVIdentity("x"),
 					Attr:   "on",
 					Value:  TVIdentity("y"),
 					TestOp: TestOpEqual,
 				},
 				{
-					Name:   TVIdentity("x"),
+					ID:     TVIdentity("x"),
 					Attr:   "color",
 					Value:  TVString("red"),
 					TestOp: TestOpEqual,
 				},
 			}
 		)
+
 		BeforeEach(func() {
 			ams = make([]*AlphaMem, 0, len(conds))
 			for _, c := range conds {
@@ -145,7 +166,7 @@ var _ = Describe("AlphaNet", func() {
 			}
 
 			testWMEs = getTestWMEs()
-			an.AddWME(testWMEs...)
+			lo.ForEach(testWMEs, func(item *WME, _ int) {an.AddWME(item)})
 		})
 
 		AfterEach(func() {
@@ -177,6 +198,57 @@ var _ = Describe("AlphaNet", func() {
 				Expect(redCondWMEs).To(ContainElement(w))
 				return false
 			})
+		})
+	})
+
+	Describe("RemoveWME", func() {
+		var (
+			testWMEs []*WME
+			ams      []*AlphaMem
+			conds    = []Cond{
+				{
+					ID:     TVIdentity("x"),
+					Attr:   "on",
+					Value:  TVIdentity("y"),
+					TestOp: TestOpEqual,
+				},
+				{
+					ID:     TVIdentity("x"),
+					Attr:   "color",
+					Value:  TVString("red"),
+					TestOp: TestOpEqual,
+				},
+			}
+		)
+
+		BeforeEach(func() {
+			ams = make([]*AlphaMem, 0, len(conds))
+			for _, c := range conds {
+				am := an.MakeAlphaMem(c, nil)
+				Expect(am).NotTo(BeNil())
+				ams = append(ams, am)
+			}
+
+			testWMEs = getTestWMEs()
+			lo.ForEach(testWMEs, func(item *WME, _ int) {an.AddWME(item)})
+		})
+
+		AfterEach(func() {
+			testWMEs = testWMEs[:0]
+		})
+
+		It("RemveWME should remove wme in alpha memory too", func() {
+			wmesToRemoved := lo.Filter[*WME](testWMEs, func(item *WME, index int) bool { return item.Field == "color" })
+			lo.ForEach[*WME](
+				wmesToRemoved,
+				func(item *WME, _ int) { an.RemoveWME(item) },
+			)
+
+			Expect(ams[0].NItems()).NotTo(BeZero())
+			Expect(ams[1].NItems()).To(BeZero())
+
+			an.AddWME(NewWME("a", "color", TVString("red")))
+			Expect(ams[1].NItems()).NotTo(BeZero())
 		})
 	})
 })

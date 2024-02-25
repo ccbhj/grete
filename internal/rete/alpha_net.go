@@ -10,8 +10,8 @@ type (
 		Field TVString
 		Value TestValue
 
-		tokens    []*Token
-		alphaMems []*AlphaMem
+		tokens    map[*Token]struct{}
+		alphaMems map[*AlphaMem]struct{}
 		// negativeJoinResults *list.List[*NegativeJoinResult]
 	}
 
@@ -57,15 +57,14 @@ func NewWME(name TVIdentity, field TVString, value TestValue) *WME {
 		Name:  name,
 		Field: field,
 		Value: value,
+
+		tokens:    make(map[*Token]struct{}),
+		alphaMems: make(map[*AlphaMem]struct{}),
 	}
 }
 
 func (w WME) Clone() *WME {
 	return NewWME(w.Name, w.Field, w.Value)
-}
-
-func (w WME) Hash() uint64 {
-	return uint64(mix32(mix32(w.Name.Hash(), w.Field.Hash()), w.Value.Hash()))
 }
 
 func newTopConstantTestNode() *ConstantTestNode {
@@ -182,8 +181,7 @@ type (
 	// AlphaMem store those WMEs that passes constant test
 	AlphaMem struct {
 		inputConstantNode *ConstantTestNode            // input ConstantTestNode
-		items             *list.List[*WME]             // wmes that passed tests of ConstantTestNode
-		nitem             int                          // count of items
+		items             map[*WME]struct{}            // wmes that passed tests of ConstantTestNode
 		successors        *list.List[AlphaMemSuccesor] // ordered
 		// reference_count int
 	}
@@ -196,13 +194,47 @@ func (w *WME) passAllConstantTest(c Cond) bool {
 
 func NewAlphaMem(input *ConstantTestNode, items []*WME) *AlphaMem {
 	am := &AlphaMem{
-		items:             list.New[*WME](),
+		items:             make(map[*WME]struct{}),
 		inputConstantNode: input,
 	}
 	for i := 0; i < len(items); i++ {
-		am.items.PushBack(items[i])
+		w := items[i]
+		if am.hasWME(w) {
+			continue
+		}
+		am.addWME(items[i])
 	}
 	return am
+}
+
+func (m *AlphaMem) hasWME(w *WME) bool {
+	_, in := m.items[w]
+	return in
+}
+
+func (m *AlphaMem) addWME(w *WME) {
+	m.items[w] = struct{}{}
+	w.alphaMems[m] = struct{}{}
+}
+
+func (m *AlphaMem) removeWME(w *WME) {
+	delete(m.items, w)
+	for am := range w.alphaMems {
+		delete(am.items, w)
+		// TODO: try to left unlink the am from join node
+	}
+}
+
+func (m *AlphaMem) NItems() int {
+	return len(m.items)
+}
+
+func (m *AlphaMem) ForEachItem(fn func(*WME) (stop bool)) {
+	for item := range m.items {
+		if fn(item) {
+			return
+		}
+	}
 }
 
 func (m *AlphaMem) AddSuccessor(successors ...AlphaMemSuccesor) {
@@ -220,7 +252,7 @@ func (m *AlphaMem) RemoveSuccessor(successor AlphaMemSuccesor) {
 	})
 }
 
-func (m *AlphaMem) ForEachSuccessor(fn func(AlphaMemSuccesor)) {
+func (m *AlphaMem) forEachSuccessor(fn func(AlphaMemSuccesor)) {
 	if m.successors == nil {
 		return
 	}
@@ -233,30 +265,17 @@ func (m *AlphaMem) IsSuccessorsEmpty() bool {
 	return isListEmpty(m.successors)
 }
 
-func (m *AlphaMem) ForEachItem(fn func(*WME) (stop bool)) {
-	listHeadForEach(m.items, fn)
-}
-
-func (m *AlphaMem) NItems() int {
-	return m.nitem
-}
-
 func (m *AlphaMem) Activate(w *WME) int {
-	// insert wme at the head of node->items
-	if m.items == nil {
-		m.items = list.New[*WME]()
+	if m.hasWME(w) {
+		return 1
 	}
-	m.nitem++
-	m.items.PushFront(w)
-
-	// for tree-based removal
-	w.alphaMems = append(w.alphaMems, m)
+	// insert wme at the head of node->items
+	m.addWME(w)
 
 	ret := 0
-	m.ForEachSuccessor(func(node AlphaMemSuccesor) {
+	m.forEachSuccessor(func(node AlphaMemSuccesor) {
 		ret += node.RightActivate(w)
 	})
-
 	return ret
 }
 
@@ -278,10 +297,18 @@ func (n *AlphaNetwork) AlphaRoot() *ConstantTestNode {
 	return n.root
 }
 
-func (n *AlphaNetwork) AddWME(wmes ...*WME) {
-	for _, wme := range wmes {
-		n.root.Activate(wme)
+func (n *AlphaNetwork) AddWME(w *WME) {
+	n.root.Activate(w)
+}
+
+func (n *AlphaNetwork) RemoveWME(w *WME) {
+	for am := range w.alphaMems {
+		am.removeWME(w)
 	}
+	for t := range w.tokens {
+		t.destory()
+	}
+	// TODO: support negative node(clear negativeJoinResults)
 }
 
 func (n *AlphaNetwork) makeConstantTestNode(parent *ConstantTestNode, tt TestType, tv TestValue, fn TestFunc) *ConstantTestNode {
@@ -304,8 +331,8 @@ func (n *AlphaNetwork) makeConstantTestNode(parent *ConstantTestNode, tt TestTyp
 }
 
 func (n *AlphaNetwork) MakeAlphaMem(c Cond, initWMEs map[uint64]*WME) *AlphaMem {
-	ch := c.Hash()
-	if am, in := n.cond2AlphaMem[ch]; in {
+	h := n.hashCond(c)
+	if am, in := n.cond2AlphaMem[h]; in {
 		return am
 	}
 	currentNode := n.root
@@ -326,6 +353,27 @@ func (n *AlphaNetwork) MakeAlphaMem(c Cond, initWMEs map[uint64]*WME) *AlphaMem 
 			am.Activate(w)
 		}
 	}
-	n.cond2AlphaMem[ch] = am
+	n.cond2AlphaMem[h] = am
 	return am
+}
+
+func (n *AlphaNetwork) hashCond(c Cond) uint64 {
+	// In the paper, the authors propose to use exhaustive-table-lookup to figure out which alpha memory should be used.
+	// The exhaustive-table-lookup combine the id, attribute and value in an condition to lookup in an cache table but all the
+	// value that is not a "constant" value will be treated as an wildcard and got ignored. The author assumed that all the
+	// value in a condition can be a "constant" but I doubt that supporting variables to be attributes or "constant" to be
+	// attribute are necessary. As a result, here I assume that:
+	//   - cond.ID must be TestValueTypeIdentity and we will NOT build ConstantTestNode for it;
+	//   - cond.Attr must be constant(TVString) and we will always build ConstantTestNode for it;
+	//   - cond.Value might be TestValueTypeIdentity and we will sometimes build ConstantTestNode for it;
+	// see (*AlphaNetwork).MakeAlphaMem for the implementation.
+
+	// constant test will never perform constant test on values whose type is TestValueTypeIdentity
+	// so we don't need to take c.Name into consideration when hashing it.
+	opt := CondHashOptMaskID
+	if c.Value.Type() == TestValueTypeIdentity {
+		opt |= CondHashOptMaskValue
+	}
+
+	return c.Hash(opt)
 }

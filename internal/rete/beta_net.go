@@ -12,11 +12,16 @@ type (
 		wme    *WME // dummy node if wme == nil
 
 		node     ReteNode // point to the memory that the token's in
-		children []*Token
+		children map[*Token]struct{}
 
 		// joinResults *list.List[*NegativeJoinResult] // used only on tokens in negative nodes
 		// nccResult *list.List[*Token] // similar to JoinNode but used only in NCC node
 		// Owner *Token // on tokens in NCC partner: token in whose nccResult this result reside
+	}
+
+	TokenMemory interface {
+		ReteNode
+		RemoveToken(*Token)
 	}
 
 	BetaNode interface {
@@ -33,16 +38,19 @@ type (
 	}
 )
 
-func makeToken(node ReteNode, parent *Token, wme *WME) *Token {
+func NewToken(node ReteNode, parent *Token, wme *WME) *Token {
 	token := &Token{
-		parent: parent,
-		wme:    wme,
-		node:   node,
+		parent:   parent,
+		wme:      wme,
+		node:     node,
+		children: make(map[*Token]struct{}),
 	}
 
-	parent.children = append(parent.children, token)
+	if parent != nil {
+		parent.children[token] = struct{}{}
+	}
 	if wme != nil {
-		wme.tokens = append(wme.tokens, token) // for tree-based removal
+		wme.tokens[token] = struct{}{}
 	}
 
 	return token
@@ -56,26 +64,71 @@ func (t *Token) toWMEs() []*WME {
 	return wmes
 }
 
+func (t *Token) destory() {
+	// clean children
+	for child := range t.children {
+		child.destory()
+	}
+	t.children = nil
+
+	// remove token from TokenMemory
+	node := t.node
+	if tm, ok := node.(TokenMemory); ok {
+		tm.RemoveToken(t)
+		// TODO: try right unlink here
+	}
+	t.node = nil
+
+	// remove token from list of tok.wme.tokens if not dummy node
+	if t.wme != nil {
+		delete(t.wme.tokens, t)
+		t.wme = nil
+	}
+
+	// remove tok from the list of tok.parent.children if not dummy node
+	if t.parent != nil {
+		pc := t.parent.children
+		delete(pc, t)
+		t.parent = nil
+	}
+}
+
 // BetaNode
 type (
 	BetaMem struct {
 		ReteNode
-		items         []*Token
+		items         map[*Token]struct{}
 		rightUnlinked bool
 	}
 )
 
-func NewBetaMem(parent ReteNode, items ...*Token) *BetaMem {
+var _ TokenMemory = (*BetaMem)(nil)
+
+func (bm *BetaMem) RemoveToken(token *Token) {
+	delete(bm.items, token)
+}
+
+func NewBetaMem(parent ReteNode) *BetaMem {
 	bm := &BetaMem{
-		items: items,
+		items: make(map[*Token]struct{}),
 	}
 	bm.ReteNode = NewReteNode(parent, bm)
 	return bm
 }
 
 func newDummyBetaMem() *BetaMem {
-	tk := &Token{}
-	return NewBetaMem(nil, tk)
+	bm := NewBetaMem(nil)
+	tk := NewToken(bm, nil, nil)
+	bm.addToken(tk)
+	return bm
+}
+
+func (bm *BetaMem) addToken(tk *Token) {
+	bm.items[tk] = struct{}{}
+}
+
+func (bm *BetaMem) removeToken(tk *Token) {
+	delete(bm.items, tk)
 }
 
 func (bm *BetaMem) Remove() {
@@ -86,8 +139,8 @@ func (bm *BetaMem) Remove() {
 }
 
 func (bm *BetaMem) LeftActivate(token *Token, wme *WME) int {
-	newToken := makeToken(bm, token, wme)
-	bm.items = append(bm.items, newToken)
+	newToken := NewToken(bm, token, wme)
+	bm.addToken(newToken)
 
 	ret := 0
 	bm.ForEachChild(func(child ReteNode) (stop bool) {
@@ -105,7 +158,6 @@ type (
 		fieldOfArg1      TestType
 		fieldOfArg2      TestType
 		condOffsetOfArg2 int
-		TestOp           TestOp
 	}
 
 	JoinNode struct {
@@ -113,8 +165,15 @@ type (
 		amem                        *AlphaMem
 		tests                       []*TestAtJoinNode
 		nearestAncestorWithSameAmem ReteNode
+		betaMem                     *BetaMem // for speeding up the construction
 	}
 )
+
+func (t TestAtJoinNode) equal(other TestAtJoinNode) bool {
+	return t.fieldOfArg1 == other.fieldOfArg1 &&
+		t.fieldOfArg2 == other.fieldOfArg2 &&
+		t.condOffsetOfArg2 == other.condOffsetOfArg2
+}
 
 func NewJoinNode(parent ReteNode, amem *AlphaMem,
 	tests []*TestAtJoinNode, nearestAncestorWithSameAmem ReteNode) *JoinNode {
@@ -144,7 +203,7 @@ func performTests(tests []*TestAtJoinNode, tk *Token, wme *WME) bool {
 		}
 		otherWME := p.wme
 		arg2 := thisTest.fieldOfArg2.GetField(otherWME)
-		if !thisTest.TestOp.ToFunc()(arg1, arg2) {
+		if !TestEqual(arg1, arg2) {
 			return false
 		}
 	}
@@ -164,8 +223,7 @@ func (n *JoinNode) RightActivate(w *WME) int {
 	// relink to AlphaMem
 	// }
 
-	for i := 0; i < len(bm.items); i++ {
-		tk := bm.items[i]
+	for tk := range bm.items {
 		if performTests(n.tests, tk, w) {
 			n.ForEachChildNonStop(func(child ReteNode) {
 				if bn, ok := child.(BetaNode); ok {
@@ -208,14 +266,16 @@ func (n *JoinNode) LeftActivate(tk *Token, _ *WME) int {
 type (
 	PNode struct {
 		ReteNode
-		items []*Token
+		items map[*Token]struct{}
 		lhs   []Cond
 	}
 )
 
+var _ TokenMemory = (*PNode)(nil)
+
 func NewPNode(parent ReteNode, lhs []Cond) *PNode {
 	pn := &PNode{
-		items: make([]*Token, 0, 1),
+		items: make(map[*Token]struct{}),
 		lhs:   lhs,
 	}
 
@@ -224,8 +284,8 @@ func NewPNode(parent ReteNode, lhs []Cond) *PNode {
 }
 
 func (pn *PNode) LeftActivate(token *Token, wme *WME) int {
-	newToken := makeToken(pn, token, wme)
-	pn.items = append(pn.items, newToken)
+	newToken := NewToken(pn, token, wme)
+	pn.items[newToken] = struct{}{}
 	return 1
 }
 
@@ -235,12 +295,11 @@ func (pn *PNode) AnyMatches() bool {
 
 func (pn *PNode) Matches() []map[TVIdentity]Fact {
 	matches := make([]map[TVIdentity]Fact, 0, len(pn.items))
-	for i := range pn.items {
-		item := pn.items[i]
+	for item := range pn.items {
 		j := len(pn.lhs) - 1
 		match := make(map[TVIdentity]Fact, len(pn.lhs))
 		for ; item.wme != nil; item, j = item.parent, j-1 {
-			id := pn.lhs[j].Name
+			id := pn.lhs[j].ID
 			wme := item.wme
 			match[id] = factOfWME(wme)
 		}
@@ -248,6 +307,10 @@ func (pn *PNode) Matches() []map[TVIdentity]Fact {
 	}
 
 	return matches
+}
+
+func (pn *PNode) RemoveToken(token *Token) {
+	delete(pn.items, token)
 }
 
 func NewBetaNetwork(an *AlphaNetwork) *BetaNetwork {
@@ -261,7 +324,7 @@ func NewBetaNetwork(an *AlphaNetwork) *BetaNetwork {
 
 func getJoinTestFromConds(c Cond, prevConds []Cond) []*TestAtJoinNode {
 	ret := make([]*TestAtJoinNode, 0, 2)
-	id, val := c.Name, c.Value
+	id, val := c.ID, c.Value
 	// each condition will mapped to a token
 	for i := len(prevConds) - 1; i >= 0; i-- {
 		addNode := func(fieldOfArg1, fieldOfArg2 TestType) {
@@ -269,13 +332,12 @@ func getJoinTestFromConds(c Cond, prevConds []Cond) []*TestAtJoinNode {
 				fieldOfArg1:      fieldOfArg1,
 				fieldOfArg2:      fieldOfArg2,
 				condOffsetOfArg2: len(prevConds) - i - 1,
-				TestOp:           TestOpEqual,
 			})
 		}
 		prevCond := prevConds[i]
 
 		// check id
-		if prevCond.Name == id {
+		if prevCond.ID == id {
 			addNode(TestTypeID, TestTypeID)
 		}
 		if isIdentity(prevCond.Value) && prevCond.Value == id {
@@ -284,7 +346,7 @@ func getJoinTestFromConds(c Cond, prevConds []Cond) []*TestAtJoinNode {
 
 		// check value
 		if isIdentity(val) {
-			if prevCond.Name == val {
+			if prevCond.ID == val {
 				addNode(TestTypeValue, TestTypeID)
 			}
 			if isIdentity(prevCond.Value) && prevCond.Value == val {
@@ -333,7 +395,7 @@ func (bn *BetaNetwork) buildOrShareJoinNode(parent ReteNode, am *AlphaMem, tests
 		// compare alpha memory and tests
 		if jn.amem == am && len(jn.tests) == len(tests) {
 			for i := 0; i < len(jn.tests); i++ {
-				if jn.tests[i] != tests[i] {
+				if !jn.tests[i].equal(*tests[i]) {
 					return false
 				}
 			}
@@ -359,7 +421,16 @@ func (bn *BetaNetwork) buildOrShareBetaMem(parent ReteNode) *BetaMem {
 		return bm
 	}
 
-	var bm *BetaMem
+	var (
+		bm             *BetaMem
+		parentJoinNode *JoinNode
+	)
+	if jn, ok := parent.(*JoinNode); ok {
+		parentJoinNode = jn
+	}
+	if parentJoinNode != nil && parentJoinNode.betaMem != nil {
+		return parentJoinNode.betaMem
+	}
 	parent.ForEachChild(func(child ReteNode) (stop bool) {
 		if m, ok := child.(*BetaMem); ok {
 			bm = m
@@ -374,6 +445,7 @@ func (bn *BetaNetwork) buildOrShareBetaMem(parent ReteNode) *BetaMem {
 
 	bm = NewBetaMem(parent)
 	bn.updateNewNodeWithMatchesFromAbove(bm)
+	parentJoinNode.betaMem = bm
 	return bm
 }
 
@@ -381,8 +453,7 @@ func (bn *BetaNetwork) updateNewNodeWithMatchesFromAbove(newNode ReteNode) {
 	switch parent := newNode.Parent().(type) {
 	case *BetaMem:
 		// directly check all the items from parent and matched them
-		for i := 0; i < len(parent.items); i++ {
-			tok := parent.items[i]
+		for tok := range parent.items {
 			if bn, ok := newNode.(BetaNode); ok {
 				bn.LeftActivate(tok, nil)
 			}
@@ -409,16 +480,24 @@ func (bn *BetaNetwork) updateNewNodeWithMatchesFromAbove(newNode ReteNode) {
 	}
 }
 
-func (bn *BetaNetwork) AddFact(facts ...Fact) {
-	for _, fact := range facts {
-		w := wmeFromFact(fact)
-		h := w.Hash()
-		if _, in := bn.workingMem[h]; in {
-			continue
-		}
-		bn.workingMem[h] = w
-		bn.an.AddWME(w)
+func (bn *BetaNetwork) AddFact(fact Fact) {
+	h := fact.Hash()
+	if _, in := bn.workingMem[h]; in {
+		return
 	}
+	w := wmeFromFact(fact)
+	bn.workingMem[h] = w
+	bn.an.AddWME(w)
+}
+
+func (bn *BetaNetwork) RemoveFact(fact Fact) {
+	h := fact.Hash()
+	w, in := bn.workingMem[h]
+	if !in {
+		return
+	}
+	bn.an.RemoveWME(w)
+	delete(bn.workingMem, h)
 }
 
 func (bn *BetaNetwork) AddProduction(id string, lhs ...Cond) *PNode {
@@ -455,4 +534,8 @@ func factOfWME(w *WME) Fact {
 		Field: w.Field,
 		Value: w.Value,
 	}
+}
+
+func (f Fact) Hash() uint64 {
+	return uint64(mix32(mix32(f.ID.Hash(), f.Field.Hash()), f.Value.Hash()))
 }

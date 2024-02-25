@@ -18,7 +18,7 @@ type (
 	TestOp int
 
 	Cond struct {
-		Name     TVIdentity
+		ID       TVIdentity
 		Attr     TVString
 		Value    TestValue
 		Negative bool
@@ -89,31 +89,6 @@ func (TVFloat) Type() TestValueType { return TestValueTypeFloat }
 func (v TVFloat) Hash() uint32      { return hash32(math.Float64bits(float64(v))) }
 func (v TVFloat) toFloat() TVFloat  { return TVFloat(v) }
 
-/*
- * Some constants to generate hash for Condition
- *
- * negative?  reserved          test_op_type(8)      name/attr/value hash(32)
- *    ^          ^                  ^                     ^
- *    |          |                  |                     |
- *   +-+------------------------+-------+------------------......--------------+
- * 63 62                     39     32 31                                    0
- */
-
-const (
-	condTestOpTypeOffset uint64 = 32
-	condTestOpTypeMask   uint64 = ((1 << 8) - 1) << condTestOpTypeOffset
-	condTestNegativeFlag uint64 = 1 << 63
-)
-
-func (c Cond) Hash() uint64 {
-	x := uint64(mix32(mix32(c.Name.Hash(), c.Attr.Hash()), c.Value.Hash()))
-	ret := ((uint64(c.TestOp) << condTestOpTypeOffset) & condTestOpTypeMask) | x
-	if c.Negative {
-		return ret | condTestNegativeFlag
-	}
-	return ret
-}
-
 // TestOp
 const (
 	TestOpEqual TestOp = iota
@@ -165,4 +140,43 @@ func conv2Float(v TestValue) (TVFloat, bool) {
 		return 0, false
 	}
 	return f.toFloat(), ok
+}
+
+/*
+ * Some constants to generate hash for Condition
+ *
+ * negative?  reserved          test_op_type(8)      name/attr/value hash(32)
+ *    ^          ^                  ^                     ^
+ *    |          |                  |                     |
+ *   +-+------------------------+-------+------------------......--------------+
+ * 63 62                     39     32 31                                    0
+ */
+const (
+	condTestOpTypeOffset uint64 = 32
+	condTestOpTypeMask   uint64 = ((1 << 8) - 1) << condTestOpTypeOffset
+	condTestNegativeFlag uint64 = 1 << 63
+)
+
+const (
+	CondHashOptMaskID uint64 = 1 << (iota)
+	CondHashOptMaskValue
+)
+
+func (c Cond) Hash(opt uint64) uint64 {
+	const condHashOptMaskIDAndValue = (CondHashOptMaskID | CondHashOptMaskValue)
+	var x uint64 = 1
+	if b := opt & condHashOptMaskIDAndValue; b == 0 {
+		x = uint64(mix32(mix32(c.ID.Hash(), c.Attr.Hash()), c.Value.Hash()))
+	} else if b == condHashOptMaskIDAndValue {
+		x = uint64(c.Attr.Hash())
+	} else if opt&CondHashOptMaskID != 0 {
+		x = uint64(mix32(c.Value.Hash(), c.Attr.Hash()))
+	} else if opt&CondHashOptMaskValue != 0 {
+		x = uint64(mix32(c.ID.Hash(), c.Attr.Hash()))
+	}
+	ret := ((uint64(c.TestOp) << condTestOpTypeOffset) & condTestOpTypeMask) | x
+	if c.Negative {
+		return ret | condTestNegativeFlag
+	}
+	return ret
 }
