@@ -1,5 +1,7 @@
 package rete
 
+import "errors"
+
 type (
 	Fact struct {
 		ID    TVIdentity
@@ -12,7 +14,7 @@ type (
 		wme    *WME // dummy node if wme == nil
 
 		node     ReteNode // point to the memory that the token's in
-		children map[*Token]struct{}
+		children set[*Token]
 
 		// joinResults *list.List[*NegativeJoinResult] // used only on tokens in negative nodes
 		// nccResult *list.List[*Token] // similar to JoinNode but used only in NCC node
@@ -21,13 +23,16 @@ type (
 
 	TokenMemory interface {
 		ReteNode
-		RemoveToken(*Token)
+		removeToken(*Token)
 	}
 
 	BetaNode interface {
-		// LeftActivate notify when there is an token found,
+		ReteNode
+		// leftActivate notify when there is an token found,
 		// which means an early conditions match found
-		LeftActivate(token *Token, wme *WME) int
+		leftActivate(token *Token, wme *WME) int
+		// detach unlink a BetaNode from it parent and children
+		detach()
 	}
 
 	BetaNetwork struct {
@@ -43,14 +48,14 @@ func NewToken(node ReteNode, parent *Token, wme *WME) *Token {
 		parent:   parent,
 		wme:      wme,
 		node:     node,
-		children: make(map[*Token]struct{}),
+		children: newSet[*Token](),
 	}
 
 	if parent != nil {
-		parent.children[token] = struct{}{}
+		parent.children.Add(token)
 	}
 	if wme != nil {
-		wme.tokens[token] = struct{}{}
+		wme.tokens.Add(token)
 	}
 
 	return token
@@ -74,21 +79,21 @@ func (t *Token) destory() {
 	// remove token from TokenMemory
 	node := t.node
 	if tm, ok := node.(TokenMemory); ok {
-		tm.RemoveToken(t)
+		tm.removeToken(t)
 		// TODO: try right unlink here
 	}
 	t.node = nil
 
 	// remove token from list of tok.wme.tokens if not dummy node
 	if t.wme != nil {
-		delete(t.wme.tokens, t)
+		t.wme.tokens.Del(t)
 		t.wme = nil
 	}
 
 	// remove tok from the list of tok.parent.children if not dummy node
 	if t.parent != nil {
 		pc := t.parent.children
-		delete(pc, t)
+		pc.Del(t)
 		t.parent = nil
 	}
 }
@@ -97,20 +102,25 @@ func (t *Token) destory() {
 type (
 	BetaMem struct {
 		ReteNode
-		items         map[*Token]struct{}
+		items         set[*Token]
 		rightUnlinked bool
 	}
 )
 
 var _ TokenMemory = (*BetaMem)(nil)
+var _ BetaNode = (*BetaMem)(nil)
 
-func (bm *BetaMem) RemoveToken(token *Token) {
-	delete(bm.items, token)
+func (bm *BetaMem) removeToken(token *Token) {
+	if bm.isDummyBetaMem() {
+		// do not remove the dummy token in a dummy betaMem
+		return
+	}
+	bm.items.Del(token)
 }
 
 func NewBetaMem(parent ReteNode) *BetaMem {
 	bm := &BetaMem{
-		items: make(map[*Token]struct{}),
+		items: newSet[*Token](),
 	}
 	bm.ReteNode = NewReteNode(parent, bm)
 	return bm
@@ -119,33 +129,32 @@ func NewBetaMem(parent ReteNode) *BetaMem {
 func newDummyBetaMem() *BetaMem {
 	bm := NewBetaMem(nil)
 	tk := NewToken(bm, nil, nil)
-	bm.addToken(tk)
+	bm.items.Add(tk)
 	return bm
 }
 
-func (bm *BetaMem) addToken(tk *Token) {
-	bm.items[tk] = struct{}{}
+func (bm *BetaMem) isDummyBetaMem() bool {
+	return bm.Parent() == nil
 }
 
-func (bm *BetaMem) removeToken(tk *Token) {
-	delete(bm.items, tk)
+func (bm *BetaMem) detach() {
+	if bm.isDummyBetaMem() {
+		return
+	}
+	for item := range bm.items {
+		item.destory()
+	}
+	bm.items.Clear()
 }
 
-func (bm *BetaMem) Remove() {
-	panic("TODO")
-	// for len(bm.items) > 0 {
-	// 	deleteTokenAndDescendents(m.items[0])
-	// }
-}
-
-func (bm *BetaMem) LeftActivate(token *Token, wme *WME) int {
+func (bm *BetaMem) leftActivate(token *Token, wme *WME) int {
 	newToken := NewToken(bm, token, wme)
-	bm.addToken(newToken)
+	bm.items.Add(newToken)
 
 	ret := 0
 	bm.ForEachChild(func(child ReteNode) (stop bool) {
 		if bn, ok := child.(BetaNode); ok {
-			ret += bn.LeftActivate(newToken, wme)
+			ret += bn.leftActivate(newToken, wme)
 		}
 		return false
 	})
@@ -165,9 +174,12 @@ type (
 		amem                        *AlphaMem
 		tests                       []*TestAtJoinNode
 		nearestAncestorWithSameAmem ReteNode
-		betaMem                     *BetaMem // for speeding up the construction
+		betaMem                     *BetaMem // one of then children, for speeding up the construction
+		bn                          *BetaNetwork
 	}
 )
+
+var _ BetaNode = (*JoinNode)(nil)
 
 func (t TestAtJoinNode) equal(other TestAtJoinNode) bool {
 	return t.fieldOfArg1 == other.fieldOfArg1 &&
@@ -175,9 +187,10 @@ func (t TestAtJoinNode) equal(other TestAtJoinNode) bool {
 		t.condOffsetOfArg2 == other.condOffsetOfArg2
 }
 
-func NewJoinNode(parent ReteNode, amem *AlphaMem,
+func newJoinNode(bn *BetaNetwork, parent ReteNode, amem *AlphaMem,
 	tests []*TestAtJoinNode, nearestAncestorWithSameAmem ReteNode) *JoinNode {
 	jn := &JoinNode{
+		bn:                          bn,
 		amem:                        amem,
 		tests:                       tests,
 		nearestAncestorWithSameAmem: nearestAncestorWithSameAmem,
@@ -227,7 +240,7 @@ func (n *JoinNode) RightActivate(w *WME) int {
 		if performTests(n.tests, tk, w) {
 			n.ForEachChildNonStop(func(child ReteNode) {
 				if bn, ok := child.(BetaNode); ok {
-					ret += bn.LeftActivate(tk, w)
+					ret += bn.leftActivate(tk, w)
 				}
 			})
 		}
@@ -236,7 +249,7 @@ func (n *JoinNode) RightActivate(w *WME) int {
 	return ret
 }
 
-func (n *JoinNode) LeftActivate(tk *Token, _ *WME) int {
+func (n *JoinNode) leftActivate(tk *Token, _ *WME) int {
 	var (
 		am  = n.amem
 		ret = 0
@@ -252,7 +265,7 @@ func (n *JoinNode) LeftActivate(tk *Token, _ *WME) int {
 		if performTests(n.tests, tk, w) {
 			n.ForEachChildNonStop(func(child ReteNode) {
 				if bn, ok := child.(BetaNode); ok {
-					ret += bn.LeftActivate(tk, w)
+					ret += bn.leftActivate(tk, w)
 				}
 			})
 		}
@@ -263,19 +276,33 @@ func (n *JoinNode) LeftActivate(tk *Token, _ *WME) int {
 	return ret
 }
 
+func (n *JoinNode) detach() {
+	n.amem.RemoveSuccessor(n)
+	// is n.amem dangling?
+	if n.amem.IsSuccessorsEmpty() {
+		// destory alpha mem through alpha net
+		n.bn.an.DestoryAlphaMem(n.amem)
+		n.amem = nil
+	}
+	clear(n.tests)
+	n.betaMem = nil
+	n.bn = nil
+}
+
 type (
 	PNode struct {
 		ReteNode
-		items map[*Token]struct{}
+		items set[*Token]
 		lhs   []Cond
 	}
 )
 
 var _ TokenMemory = (*PNode)(nil)
+var _ BetaNode = (*PNode)(nil)
 
 func NewPNode(parent ReteNode, lhs []Cond) *PNode {
 	pn := &PNode{
-		items: make(map[*Token]struct{}),
+		items: newSet[*Token](),
 		lhs:   lhs,
 	}
 
@@ -283,14 +310,22 @@ func NewPNode(parent ReteNode, lhs []Cond) *PNode {
 	return pn
 }
 
-func (pn *PNode) LeftActivate(token *Token, wme *WME) int {
+func (pn *PNode) leftActivate(token *Token, wme *WME) int {
 	newToken := NewToken(pn, token, wme)
-	pn.items[newToken] = struct{}{}
+	pn.items.Add(newToken)
 	return 1
 }
 
+func (pn *PNode) detach() {
+	for item := range pn.items {
+		item.destory()
+	}
+	pn.items.Clear()
+}
+
+// AnyMatches check if there is any match in a production node
 func (pn *PNode) AnyMatches() bool {
-	return len(pn.items) > 0
+	return pn.items.Len() > 0
 }
 
 func (pn *PNode) Matches() []map[TVIdentity]Fact {
@@ -301,7 +336,7 @@ func (pn *PNode) Matches() []map[TVIdentity]Fact {
 		for ; item.wme != nil; item, j = item.parent, j-1 {
 			id := pn.lhs[j].ID
 			wme := item.wme
-			match[id] = factOfWME(wme)
+			match[id] = wme.FactOfWME()
 		}
 		matches = append(matches, match)
 	}
@@ -309,8 +344,8 @@ func (pn *PNode) Matches() []map[TVIdentity]Fact {
 	return matches
 }
 
-func (pn *PNode) RemoveToken(token *Token) {
-	delete(pn.items, token)
+func (pn *PNode) removeToken(token *Token) {
+	pn.items.Del(token)
 }
 
 func NewBetaNetwork(an *AlphaNetwork) *BetaNetwork {
@@ -371,7 +406,7 @@ func (bn *BetaNetwork) buildOrShareNetwork(parent ReteNode, conds []Cond, earlie
 		case !c.Negative /* TODO: exclude NCCNode */ :
 			currentNode = bn.buildOrShareBetaMem(currentNode)
 			currentNode = bn.buildOrShareJoinNode(currentNode,
-				bn.an.MakeAlphaMem(c, bn.workingMem),
+				bn.an.MakeAlphaMem(c),
 				getJoinTestFromConds(c, condsHigherUp))
 		case c.Negative:
 			// TODO: support negative node
@@ -409,7 +444,7 @@ func (bn *BetaNetwork) buildOrShareJoinNode(parent ReteNode, am *AlphaMem, tests
 	}
 
 	// TODO: set the nearestAncestorWithSameAmem
-	jn := NewJoinNode(parent, am, tests, nil)
+	jn := newJoinNode(bn, parent, am, tests, nil)
 	return jn
 }
 
@@ -455,7 +490,7 @@ func (bn *BetaNetwork) updateNewNodeWithMatchesFromAbove(newNode ReteNode) {
 		// directly check all the items from parent and matched them
 		for tok := range parent.items {
 			if bn, ok := newNode.(BetaNode); ok {
-				bn.LeftActivate(tok, nil)
+				bn.leftActivate(tok, nil)
 			}
 		}
 	case *JoinNode:
@@ -480,26 +515,17 @@ func (bn *BetaNetwork) updateNewNodeWithMatchesFromAbove(newNode ReteNode) {
 	}
 }
 
+// AddFact add a fact, and propagete addition to the entire network
 func (bn *BetaNetwork) AddFact(fact Fact) {
-	h := fact.Hash()
-	if _, in := bn.workingMem[h]; in {
-		return
-	}
-	w := wmeFromFact(fact)
-	bn.workingMem[h] = w
-	bn.an.AddWME(w)
+	bn.an.AddFact(fact)
 }
 
+// RemoveFact remove a fact, and propagete removal to the entire network
 func (bn *BetaNetwork) RemoveFact(fact Fact) {
-	h := fact.Hash()
-	w, in := bn.workingMem[h]
-	if !in {
-		return
-	}
-	bn.an.RemoveWME(w)
-	delete(bn.workingMem, h)
+	bn.an.RemoveFact(fact)
 }
 
+// AddProduction add an production and register its unique id
 func (bn *BetaNetwork) AddProduction(id string, lhs ...Cond) *PNode {
 	if len(lhs) == 0 {
 		panic("need some condition")
@@ -516,7 +542,8 @@ func (bn *BetaNetwork) AddProduction(id string, lhs ...Cond) *PNode {
 	return pn
 }
 
-func (bn *BetaNetwork) GetPNode(id string) *PNode {
+// GetProduction query an production by its id
+func (bn *BetaNetwork) GetProduction(id string) *PNode {
 	n, in := bn.productions[id]
 	if !in {
 		return nil
@@ -524,18 +551,34 @@ func (bn *BetaNetwork) GetPNode(id string) *PNode {
 	return n
 }
 
-func wmeFromFact(fact Fact) *WME {
-	return NewWME(fact.ID, fact.Field, fact.Value)
-}
-
-func factOfWME(w *WME) Fact {
-	return Fact{
-		ID:    w.Name,
-		Field: w.Field,
-		Value: w.Value,
+// RemoveProduction remove a production by a production id, along with all the fact
+// related with it.
+// TODO: provide an option for reserving fact, we can just delete the pnode and its parent, grandparent and grand..grandparent if they are not shared, and leave the alpha mem so that it can still be shared and will not activate any successors if there is none
+func (bn *BetaNetwork) RemoveProduction(id string) error {
+	pnode, in := bn.productions[id]
+	if !in {
+		return errors.New("production not found")
 	}
+	delete(bn.productions, id)
+	bn.removeProduction(pnode)
+	return nil
 }
 
-func (f Fact) Hash() uint64 {
-	return uint64(mix32(mix32(f.ID.Hash(), f.Field.Hash()), f.Value.Hash()))
+func (bn *BetaNetwork) removeProduction(pnode *PNode) {
+	bn.deleteNodeAndAnyUnusedAncestors(pnode)
+}
+
+func (bn *BetaNetwork) deleteNodeAndAnyUnusedAncestors(node BetaNode) {
+	node.detach()
+
+	parent := node.Parent()
+	if parent != nil {
+		parent.RemoveChild(node)
+		if !parent.AnyChild() {
+			if bnode, ok := parent.(BetaNode); ok {
+				bn.deleteNodeAndAnyUnusedAncestors(bnode)
+			}
+		}
+	}
+	node.DetachParent()
 }

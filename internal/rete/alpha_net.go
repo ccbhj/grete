@@ -5,16 +5,18 @@ import (
 )
 
 type (
+	// WME is the working memory element, use to store the fact when matching
 	WME struct {
-		Name  TVIdentity
+		ID    TVIdentity
 		Field TVString
 		Value TestValue
 
-		tokens    map[*Token]struct{}
-		alphaMems map[*AlphaMem]struct{}
+		tokens    set[*Token]
+		alphaMems set[*AlphaMem]
 		// negativeJoinResults *list.List[*NegativeJoinResult]
 	}
 
+	// TestType specify which field of a WME we are going to test
 	TestType uint8
 
 	// ConstantTestNode perform constant test for each WME,
@@ -43,7 +45,7 @@ func (t TestType) GetField(w *WME) TestValue {
 	}
 	switch t {
 	case TestTypeID:
-		return w.Name
+		return w.ID
 	case TestTypeAttr:
 		return w.Field
 	case TestTypeValue:
@@ -54,17 +56,25 @@ func (t TestType) GetField(w *WME) TestValue {
 
 func NewWME(name TVIdentity, field TVString, value TestValue) *WME {
 	return &WME{
-		Name:  name,
+		ID:    name,
 		Field: field,
 		Value: value,
 
-		tokens:    make(map[*Token]struct{}),
-		alphaMems: make(map[*AlphaMem]struct{}),
+		tokens:    newSet[*Token](),
+		alphaMems: newSet[*AlphaMem](),
 	}
 }
 
 func (w WME) Clone() *WME {
-	return NewWME(w.Name, w.Field, w.Value)
+	return NewWME(w.ID, w.Field, w.Value)
+}
+
+func (w WME) FactOfWME() Fact {
+	return Fact{
+		ID:    w.ID,
+		Field: w.Field,
+		Value: w.Value,
+	}
 }
 
 func newTopConstantTestNode() *ConstantTestNode {
@@ -141,7 +151,7 @@ func (n *ConstantTestNode) Activate(w *WME) int {
 	case TestTypeNone:
 		break
 	case TestTypeID:
-		if !n.testFn(w.Name, n.value2test) {
+		if !n.testFn(w.ID, n.value2test) {
 			return 0
 		}
 	case TestTypeAttr:
@@ -180,10 +190,11 @@ type (
 
 	// AlphaMem store those WMEs that passes constant test
 	AlphaMem struct {
+		cond              Cond
 		inputConstantNode *ConstantTestNode            // input ConstantTestNode
-		items             map[*WME]struct{}            // wmes that passed tests of ConstantTestNode
+		items             set[*WME]                    // wmes that passed tests of ConstantTestNode
 		successors        *list.List[AlphaMemSuccesor] // ordered
-		// reference_count int
+		an                *AlphaNetwork                // which AlphaNetwork this mem belong to
 	}
 )
 
@@ -192,41 +203,35 @@ func (w *WME) passAllConstantTest(c Cond) bool {
 		((c.Value.Type() == TestValueTypeIdentity) || c.TestOp.ToFunc()(c.Value, w.Value))
 }
 
-func NewAlphaMem(input *ConstantTestNode, items []*WME) *AlphaMem {
+func newAlphaMem(cond Cond, input *ConstantTestNode, an *AlphaNetwork) *AlphaMem {
 	am := &AlphaMem{
-		items:             make(map[*WME]struct{}),
+		cond:              cond,
+		items:             newSet[*WME](),
 		inputConstantNode: input,
-	}
-	for i := 0; i < len(items); i++ {
-		w := items[i]
-		if am.hasWME(w) {
-			continue
-		}
-		am.addWME(items[i])
+		an:                an,
 	}
 	return am
 }
 
 func (m *AlphaMem) hasWME(w *WME) bool {
-	_, in := m.items[w]
-	return in
+	return m.items.Contains(w)
 }
 
 func (m *AlphaMem) addWME(w *WME) {
-	m.items[w] = struct{}{}
-	w.alphaMems[m] = struct{}{}
+	m.items.Add(w)
+	w.alphaMems.Add(m)
 }
 
 func (m *AlphaMem) removeWME(w *WME) {
-	delete(m.items, w)
+	m.items.Add(w)
 	for am := range w.alphaMems {
-		delete(am.items, w)
+		am.items.Del(w)
 		// TODO: try to left unlink the am from join node
 	}
 }
 
 func (m *AlphaMem) NItems() int {
-	return len(m.items)
+	return m.items.Len()
 }
 
 func (m *AlphaMem) ForEachItem(fn func(*WME) (stop bool)) {
@@ -269,7 +274,6 @@ func (m *AlphaMem) Activate(w *WME) int {
 	if m.hasWME(w) {
 		return 1
 	}
-	// insert wme at the head of node->items
 	m.addWME(w)
 
 	ret := 0
@@ -279,9 +283,38 @@ func (m *AlphaMem) Activate(w *WME) int {
 	return ret
 }
 
+// _destory clean remove all the WME from alpha mem along with all the ConstantTestNode that is no long in use
+func (m *AlphaMem) _destory() {
+	m.items.ForEach(func(item *WME) {
+		h := item.FactOfWME().Hash()
+		m.an.removeWME(h, item)
+	})
+
+	// clean up ConstantTestNode
+	var (
+		parent  *ConstantTestNode
+		current = m.inputConstantNode
+	)
+	current.outputMem = nil
+	// remove current node from its parent when current node has no child (leaf node)
+	for current != nil && current.hash != 0 && len(current.children) == 0 {
+		parent = current.parent
+		if parent != nil {
+			delete(parent.children, current.hash)
+		}
+		current.parent = nil
+		current = parent
+	}
+}
+
+type AlphaNetworkOption struct {
+	LazyDestory bool // whether to reserve alpha mem that is dangling when destorying
+}
+
 type AlphaNetwork struct {
 	root          *ConstantTestNode
 	cond2AlphaMem map[uint64]*AlphaMem
+	workingMems   map[uint64]*WME
 }
 
 func NewAlphaNetwork() *AlphaNetwork {
@@ -289,6 +322,7 @@ func NewAlphaNetwork() *AlphaNetwork {
 	alphaNet := &AlphaNetwork{
 		root:          root,
 		cond2AlphaMem: make(map[uint64]*AlphaMem),
+		workingMems:   make(map[uint64]*WME),
 	}
 	return alphaNet
 }
@@ -297,17 +331,39 @@ func (n *AlphaNetwork) AlphaRoot() *ConstantTestNode {
 	return n.root
 }
 
-func (n *AlphaNetwork) AddWME(w *WME) {
-	n.root.Activate(w)
+func (n *AlphaNetwork) addWME(sum uint64, w *WME) int {
+	n.workingMems[sum] = w
+	return n.root.Activate(w)
 }
 
-func (n *AlphaNetwork) RemoveWME(w *WME) {
+func (n *AlphaNetwork) AddFact(f Fact) int {
+	h := f.Hash()
+	if _, in := n.workingMems[h]; in {
+		return 0
+	}
+	w := f.WMEFromFact()
+	return n.addWME(h, w)
+}
+
+func (n *AlphaNetwork) RemoveFact(f Fact) {
+	h := f.Hash()
+	w, in := n.workingMems[h]
+	if !in {
+		return
+	}
+	n.removeWME(h, w)
+}
+
+func (n *AlphaNetwork) removeWME(sum uint64, w *WME) {
 	for am := range w.alphaMems {
 		am.removeWME(w)
 	}
+	w.alphaMems.Clear()
 	for t := range w.tokens {
 		t.destory()
 	}
+	w.tokens.Clear()
+	delete(n.workingMems, sum)
 	// TODO: support negative node(clear negativeJoinResults)
 }
 
@@ -330,7 +386,7 @@ func (n *AlphaNetwork) makeConstantTestNode(parent *ConstantTestNode, tt TestTyp
 	return newNode
 }
 
-func (n *AlphaNetwork) MakeAlphaMem(c Cond, initWMEs map[uint64]*WME) *AlphaMem {
+func (n *AlphaNetwork) MakeAlphaMem(c Cond) *AlphaMem {
 	h := n.hashCond(c)
 	if am, in := n.cond2AlphaMem[h]; in {
 		return am
@@ -345,16 +401,28 @@ func (n *AlphaNetwork) MakeAlphaMem(c Cond, initWMEs map[uint64]*WME) *AlphaMem 
 		return currentNode.outputMem
 	}
 
-	am := NewAlphaMem(currentNode, nil)
+	am := newAlphaMem(c, currentNode, n)
 	currentNode.outputMem = am
 	// initialize am with any current working memory
-	for _, w := range initWMEs {
+	for _, w := range n.workingMems {
 		if w.passAllConstantTest(c) {
 			am.Activate(w)
 		}
 	}
 	n.cond2AlphaMem[h] = am
 	return am
+}
+
+func (n *AlphaNetwork) DestoryAlphaMem(alphaMem *AlphaMem) {
+	if alphaMem == nil {
+		return
+	}
+	h := n.hashCond(alphaMem.cond)
+	if _, in := n.cond2AlphaMem[h]; !in {
+		return
+	}
+	alphaMem._destory()
+	delete(n.cond2AlphaMem, h)
 }
 
 func (n *AlphaNetwork) hashCond(c Cond) uint64 {
@@ -376,4 +444,12 @@ func (n *AlphaNetwork) hashCond(c Cond) uint64 {
 	}
 
 	return c.Hash(opt)
+}
+
+func (f Fact) WMEFromFact() *WME {
+	return NewWME(f.ID, f.Field, f.Value)
+}
+
+func (f Fact) Hash() uint64 {
+	return uint64(mix32(mix32(f.ID.Hash(), f.Field.Hash()), f.Value.Hash()))
 }

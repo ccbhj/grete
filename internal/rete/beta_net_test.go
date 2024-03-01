@@ -85,6 +85,15 @@ var testConds = []Cond{
 	},
 }
 
+func collect[T any](forEachFn func(func(T) (stop bool))) []T {
+	arr := make([]T, 0, 2)
+	forEachFn(func(t T) bool {
+		arr = append(arr, t)
+		return false
+	})
+	return arr
+}
+
 var _ = Describe("BetaNet", func() {
 	var (
 		bn *BetaNetwork
@@ -185,7 +194,7 @@ var _ = Describe("BetaNet", func() {
 					})
 				Expect(px).To(BeEquivalentTo(py))
 
-				pNode := bn.GetPNode(ruleID)
+				pNode := bn.GetProduction(ruleID)
 				Expect(pNode).To(BeIdenticalTo(px))
 			})
 
@@ -232,6 +241,104 @@ var _ = Describe("BetaNet", func() {
 
 				Expect(pNodeX.Parent().Parent()).To(BeIdenticalTo(pNodeY.Parent().Parent()))
 			})
+		})
+
+		When("removing production", func() {
+			var redFact []Fact
+			BeforeEach(func() {
+				redFact = lo.Filter(getTestFacts(), func(item Fact, index int) bool {
+					return item.Field == "color" && item.Value == TVString("red")
+				})
+			})
+
+			It("can remove a single rule", func() {
+				const ruleName = "single_rule"
+				singleRule := bn.AddProduction(ruleName, Cond{
+					ID:     "x",
+					Attr:   "color",
+					Value:  TVString("red"),
+					TestOp: TestOpEqual,
+				})
+				lo.ForEach(redFact, func(item Fact, _ int) { bn.AddFact(item) })
+				p := singleRule.Parent()
+				Expect(p.AnyChild()).ShouldNot(BeFalse())
+				Expect(collect(p.ForEachChild)).ShouldNot(BeEmpty())
+				Expect(singleRule.Matches()).ShouldNot(BeEmpty())
+
+				// now remove it
+				Expect(bn.RemoveProduction(ruleName)).Should(BeNil())
+				Expect(p.AnyChild()).Should(BeFalse())
+				Expect(collect(p.ForEachChild)).Should(BeEmpty())
+				Expect(singleRule.Matches()).Should(BeEmpty())
+				Expect(collect(an.AlphaRoot().ForEachChild)).Should(BeEmpty())
+
+				// now add it again...
+				singleRule = bn.AddProduction(ruleName, Cond{
+					ID:     "x",
+					Attr:   "color",
+					Value:  TVString("red"),
+					TestOp: TestOpEqual,
+				})
+				Expect(singleRule).ShouldNot(BeNil())
+				p = singleRule.Parent()
+				Expect(p.AnyChild()).ShouldNot(BeFalse())
+				Expect(collect(p.ForEachChild)).ShouldNot(BeEmpty())
+
+				lo.ForEach(redFact, func(item Fact, _ int) { bn.AddFact(item) })
+				Expect(singleRule.Matches()).ShouldNot(BeEmpty())
+			})
+
+			It("can remove a multi-rule production and add again", func() {
+				const ruleName = "multi_rule"
+				rules := []Cond{
+					{
+						ID:     TVIdentity("x"),
+						Attr:   "on",
+						Value:  TVIdentity("y"),
+						TestOp: TestOpEqual,
+					},
+					{
+						ID:     TVIdentity("y"),
+						Attr:   "left-of",
+						Value:  TVIdentity("z"),
+						TestOp: TestOpEqual,
+					},
+					{
+						ID:     TVIdentity("z"),
+						Attr:   "color",
+						Value:  TVString("red"),
+						TestOp: TestOpEqual,
+					}}
+				multiRule := bn.AddProduction(ruleName, rules...)
+
+				p := multiRule.Parent()
+				Expect(p.AnyChild()).ShouldNot(BeFalse())
+				Expect(collect(p.ForEachChild)).ShouldNot(BeEmpty())
+				lo.ForEach(getTestFacts(), func(item Fact, _ int) { bn.AddFact(item) })
+				Expect(multiRule.Matches()).ShouldNot(BeEmpty())
+
+				// now remove it
+				Expect(bn.RemoveProduction(ruleName)).Should(BeNil())
+				Expect(p.AnyChild()).Should(BeFalse())
+				Expect(collect(p.ForEachChild)).Should(BeEmpty())
+				Expect(multiRule.Matches()).Should(BeEmpty())
+
+				// now add it again...
+				multiRule = bn.AddProduction(ruleName, Cond{
+					ID:     "x",
+					Attr:   "color",
+					Value:  TVString("red"),
+					TestOp: TestOpEqual,
+				})
+				Expect(multiRule).ShouldNot(BeNil())
+				p = multiRule.Parent()
+				Expect(p.AnyChild()).ShouldNot(BeFalse())
+				Expect(collect(p.ForEachChild)).ShouldNot(BeEmpty())
+
+				lo.ForEach(getTestFacts(), func(item Fact, _ int) { bn.AddFact(item) })
+				Expect(multiRule.Matches()).ShouldNot(BeEmpty())
+			})
+
 		})
 
 	})

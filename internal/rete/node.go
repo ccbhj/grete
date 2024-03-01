@@ -1,20 +1,20 @@
 package rete
 
-import "github.com/zyedidia/generic/list"
-
 type (
 	ReteNode interface {
 		Parent() ReteNode
 		AddChild(children ...ReteNode)
 		AnyChild() bool
 		ClearAndRestoreChildren(fn func())
+		AttachParent(parent ReteNode)
+		RemoveChild(child ReteNode) bool
 		DetachParent()
 		ForEachChild(fn func(child ReteNode) (stop bool))
 		ForEachChildNonStop(fn func(child ReteNode))
 	}
 
 	reteNode struct {
-		children *list.List[ReteNode]
+		children set[ReteNode]
 		parent   ReteNode
 	}
 )
@@ -22,7 +22,7 @@ type (
 func NewReteNode(parent ReteNode, self ReteNode) ReteNode {
 	node := &reteNode{
 		parent:   parent,
-		children: list.New[ReteNode](),
+		children: newSet[ReteNode](),
 	}
 	if parent != nil {
 		parent.AddChild(self)
@@ -34,23 +34,30 @@ func NewReteNode(parent ReteNode, self ReteNode) ReteNode {
 func (n *reteNode) AddChild(children ...ReteNode) {
 	for i := range children {
 		child := children[i]
-		n.children.PushFront(child)
+		n.children.Add(child)
 	}
 }
 
 func (n *reteNode) AnyChild() bool {
-	return !isListEmpty(n.children)
+	return n.children.Len() > 0
 }
 
 func (n *reteNode) ForEachChild(fn func(ReteNode) (stop bool)) {
-	listHeadForEach(n.children, fn)
+	for child := range n.children {
+		if fn(child) {
+			return
+		}
+	}
 }
 
 func (n *reteNode) ForEachChildNonStop(fn func(ReteNode)) {
-	listHeadForEach(n.children, func(n ReteNode) (stop bool) {
-		fn(n)
-		return false
-	})
+	for child := range n.children {
+		fn(child)
+	}
+}
+
+func (n *reteNode) AttachParent(parent ReteNode) {
+	n.parent = parent
 }
 
 func (n *reteNode) DetachParent() {
@@ -61,16 +68,18 @@ func (n *reteNode) Parent() ReteNode {
 	return n.parent
 }
 
-func (r *reteNode) RemoveChild(child ReteNode) {
-	if removeOneFromListTailWhen(r.children,
-		func(x ReteNode) bool { return x == child }) {
+func (r *reteNode) RemoveChild(child ReteNode) bool {
+	if r.children.Contains(child) {
+		r.children.Del(child)
 		child.DetachParent()
+		return true
 	}
+	return false
 }
 
 func (r *reteNode) ClearAndRestoreChildren(fn func()) {
 	savedListOfChild := r.children
-	l := list.New[ReteNode]()
+	l := newSet[ReteNode]()
 	r.children = l
 	fn()
 	r.children = savedListOfChild
