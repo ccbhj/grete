@@ -1,6 +1,11 @@
 package rete
 
 import (
+	"reflect"
+
+	"github.com/pkg/errors"
+
+	"github.com/ccbhj/grete/internal/log"
 	"github.com/zyedidia/generic/list"
 )
 
@@ -8,56 +13,17 @@ type (
 	// WME is the working memory element, use to store the fact when matching
 	WME struct {
 		ID    TVIdentity
-		Field TVString
 		Value TestValue
 
 		tokens    set[*Token]
 		alphaMems set[*AlphaMem]
 		// negativeJoinResults *list.List[*NegativeJoinResult]
 	}
-
-	// TestType specify which field of a WME we are going to test
-	TestType uint8
-
-	// ConstantTestNode perform constant test for each WME,
-	// and implements by 'Dataflow Network'(see 2.2.1(page 27) in the paper)
-	ConstantTestNode struct {
-		hash       uint64    // hash of this ConstantTestNode
-		value2test TestValue // which field in WME we gonna test
-		testFn     TestFunc  // how to test wme's field
-
-		parent    *ConstantTestNode            // parent, nil for the root node
-		outputMem *AlphaMem                    // where to output those wmes that passed the test
-		children  map[uint64]*ConstantTestNode // children node
-	}
 )
 
-const (
-	TestTypeNone TestType = iota
-	TestTypeID
-	TestTypeAttr
-	TestTypeValue
-)
-
-func (t TestType) GetField(w *WME) TestValue {
-	if w == nil {
-		panic("wme is nil")
-	}
-	switch t {
-	case TestTypeID:
-		return w.ID
-	case TestTypeAttr:
-		return w.Field
-	case TestTypeValue:
-		return w.Value
-	}
-	return nil
-}
-
-func NewWME(name TVIdentity, field TVString, value TestValue) *WME {
+func NewWME(name TVIdentity, value TestValue) *WME {
 	return &WME{
 		ID:    name,
-		Field: field,
 		Value: value,
 
 		tokens:    newSet[*Token](),
@@ -65,123 +31,50 @@ func NewWME(name TVIdentity, field TVString, value TestValue) *WME {
 	}
 }
 
-func (w WME) Clone() *WME {
-	return NewWME(w.ID, w.Field, w.Value)
-}
-
-func (w WME) FactOfWME() Fact {
+func (w *WME) FactOfWME() Fact {
 	return Fact{
 		ID:    w.ID,
-		Field: w.Field,
 		Value: w.Value,
 	}
 }
 
-func newTopConstantTestNode() *ConstantTestNode {
-	return &ConstantTestNode{
-		parent: nil,
-		testFn: func(TestValue, TestValue) bool { return true }, // always pass the root node test
+func (w *WME) HasAttr(attr string) bool {
+	switch attr {
+	case FieldSelf, FieldID:
+		return true
 	}
-}
-
-func NewConstantTestNode(parent *ConstantTestNode, hash uint64, val2test TestValue, testFn TestFunc) *ConstantTestNode {
-	if testFn == nil {
-		testFn = TestEqual
+	val := w.Value
+	// ony TVStruct has fields other than FieldSelf
+	if val.Type() != TestValueTypeStruct {
+		return false
 	}
-	return &ConstantTestNode{
-		testFn:     testFn,
-		value2test: val2test,
-		outputMem:  nil,
-		hash:       hash,
-		children:   nil,
-		parent:     parent,
+	return val.(*TVStruct).HasField(attr)
+}
+
+func (w *WME) GetAttrValue(attr string) (TestValue, error) {
+	switch attr {
+	case FieldSelf:
+		return w.Value, nil
+	case FieldID:
+		return w.ID, nil
 	}
-}
-
-/*
- * Some constants to generate hash for ConstantTestNode
- *
- *                    test_type(4)
- *          reserved      |   test_value_type(8)    test_value_hash(32)
- *             ^          +-+     ^                     ^
- *             |            |     |                     |
- * +---------------------+----+-------+------------------......--------------+
- * 63                    44 40 39   32 31                                    0
- */
-const (
-	ctnHashTestTypeMask      uint64 = 0x0000_0F00_0000_0000
-	ctnHashTestTypeOff       uint64 = 40
-	ctnHashTestValueTypeMask uint64 = 0x0000_00FF_0000_0000
-	ctnHashTestValueTypeOff  uint64 = 32
-	ctnHashValue2TestMask    uint64 = 0xFFFF_FFFF
-)
-
-func genConstantTestHash(tt TestType, tv TestValue) uint64 {
-	return uint64(tv.Hash())&ctnHashValue2TestMask |
-		(uint64(tv.Type()&0xFF) << ctnHashTestValueTypeOff) |
-		(uint64(tt&0xF) << ctnHashTestTypeOff)
-}
-
-func (n *ConstantTestNode) TestType() TestType {
-	return TestType((n.hash >> ctnHashTestTypeOff) & 0xF)
-}
-
-func (n *ConstantTestNode) Hash() uint32 {
-	return uint32(n.hash)
-}
-
-func (n *ConstantTestNode) TestValueType() TestValueType {
-	return TestValueType((n.hash >> ctnHashTestValueTypeOff) & 0xff)
-}
-
-func (n *ConstantTestNode) OutputMem() *AlphaMem {
-	return n.outputMem
-}
-
-func (n *ConstantTestNode) ForEachChild(fn func(*ConstantTestNode) (stop bool)) {
-	for _, child := range n.children {
-		if stop := fn(child); stop {
-			break
+	val := w.Value
+	// ony TVStruct has fields other than FieldSelf
+	if val.Type() != TestValueTypeStruct {
+		return nil, errors.WithMessagef(ErrFieldNotFound, "for type is %s", val.Type().String())
+	}
+	v, err := val.(*TVStruct).GetField(attr)
+	if err != nil {
+		if errors.Is(err, ErrFieldNotFound) {
+			return nil, nil
 		}
-	}
-}
-
-func (n *ConstantTestNode) Activate(w *WME) int {
-	switch n.TestType() {
-	case TestTypeNone:
-		break
-	case TestTypeID:
-		if !n.testFn(w.ID, n.value2test) {
-			return 0
-		}
-	case TestTypeAttr:
-		if !n.testFn(TVString(w.Field), n.value2test) {
-			return 0
-		}
-	case TestTypeValue:
-		if !n.testFn(w.Value, n.value2test) {
-			return 0
-		}
+		return nil, err
 	}
 
-	if n.outputMem != nil {
-		// this is a leaf node
-		n.outputMem.Activate(w)
-		return 1
-	}
-
-	ret := 0
-	for _, child := range n.children {
-		ret += child.Activate(w)
-	}
-	return ret
+	return v, nil
 }
 
 type (
-	AlphaNode interface {
-		Activate(*WME) int
-	}
-
 	AlphaMemSuccesor interface {
 		// RightActivate notify there is an new WME added
 		// which means there is a new fact comming
@@ -190,25 +83,25 @@ type (
 
 	// AlphaMem store those WMEs that passes constant test
 	AlphaMem struct {
-		cond              Cond
-		inputConstantNode *ConstantTestNode            // input ConstantTestNode
-		items             set[*WME]                    // wmes that passed tests of ConstantTestNode
-		successors        *list.List[AlphaMemSuccesor] // ordered
-		an                *AlphaNetwork                // which AlphaNetwork this mem belong to
+		cond           Cond
+		inputAlphaNode AlphaNode
+		items          set[*WME]                    // wmes that passed tests of ConstantTestNode
+		successors     *list.List[AlphaMemSuccesor] // ordered
+		an             *AlphaNetwork                // which AlphaNetwork this mem belong to
 	}
 )
 
 func (w *WME) passAllConstantTest(c Cond) bool {
-	return w.Field == c.Attr &&
+	return w.HasAttr(string(c.AliasAttr)) &&
 		((c.Value.Type() == TestValueTypeIdentity) || c.TestOp.ToFunc()(c.Value, w.Value))
 }
 
-func newAlphaMem(cond Cond, input *ConstantTestNode, an *AlphaNetwork) *AlphaMem {
+func newAlphaMem(cond Cond, input AlphaNode, an *AlphaNetwork) *AlphaMem {
 	am := &AlphaMem{
-		cond:              cond,
-		items:             newSet[*WME](),
-		inputConstantNode: input,
-		an:                an,
+		cond:           cond,
+		items:          newSet[*WME](),
+		inputAlphaNode: input,
+		an:             an,
 	}
 	return am
 }
@@ -290,19 +183,19 @@ func (m *AlphaMem) _destory() {
 		m.an.removeWME(h, item)
 	})
 
-	// clean up ConstantTestNode
+	// clean up AlphaNode
 	var (
-		parent  *ConstantTestNode
-		current = m.inputConstantNode
+		parent  AlphaNode
+		current = m.inputAlphaNode
 	)
-	current.outputMem = nil
+	current.SetOutputMem(nil)
 	// remove current node from its parent when current node has no child (leaf node)
-	for current != nil && current.hash != 0 && len(current.children) == 0 {
-		parent = current.parent
+	for current != nil && current.Hash() != 0 && current.NChildren() == 0 {
+		parent = current.Parent()
 		if parent != nil {
-			delete(parent.children, current.hash)
+			parent.RemoveChild(current)
 		}
-		current.parent = nil
+		current.SetParent(nil)
 		current = parent
 	}
 }
@@ -312,13 +205,13 @@ type AlphaNetworkOption struct {
 }
 
 type AlphaNetwork struct {
-	root          *ConstantTestNode
+	root          AlphaNode
 	cond2AlphaMem map[uint64]*AlphaMem
 	workingMems   map[uint64]*WME
 }
 
 func NewAlphaNetwork() *AlphaNetwork {
-	root := newTopConstantTestNode()
+	root := newAlphaNode(nil)
 	alphaNet := &AlphaNetwork{
 		root:          root,
 		cond2AlphaMem: make(map[uint64]*AlphaMem),
@@ -327,13 +220,35 @@ func NewAlphaNetwork() *AlphaNetwork {
 	return alphaNet
 }
 
-func (n *AlphaNetwork) AlphaRoot() *ConstantTestNode {
+func (n *AlphaNetwork) AlphaRoot() AlphaNode {
 	return n.root
 }
 
 func (n *AlphaNetwork) addWME(sum uint64, w *WME) int {
 	n.workingMems[sum] = w
-	return n.root.Activate(w)
+	return n.activateAlphaNode(n.root, w)
+}
+
+func (n *AlphaNetwork) activateAlphaNode(node AlphaNode, w *WME) int {
+	testOk, err := node.PerformTest(w)
+	if err != nil {
+		log.L("fail to perform test on wme(%+v): %s", w, err)
+		return 0
+	}
+	if !testOk {
+		return 0
+	}
+
+	if mem := node.OutputMem(); mem != nil {
+		mem.Activate(w)
+	}
+
+	ret := 0
+	node.ForEachChild(func(child AlphaNode) (stop bool) {
+		ret += n.activateAlphaNode(child, w)
+		return false
+	})
+	return ret
 }
 
 func (n *AlphaNetwork) AddFact(f Fact) int {
@@ -367,23 +282,24 @@ func (n *AlphaNetwork) removeWME(sum uint64, w *WME) {
 	// TODO: support negative node(clear negativeJoinResults)
 }
 
-func (n *AlphaNetwork) makeConstantTestNode(parent *ConstantTestNode, tt TestType, tv TestValue, fn TestFunc) *ConstantTestNode {
-	// look for an existing node we can share
-
-	// TODO: validate tt and tv
-	h := genConstantTestHash(tt, tv)
-	node, in := parent.children[h]
-	if in && node != nil {
-		return node
+func (n *AlphaNetwork) buildOrShareTestNode(parent AlphaNode, c Cond, makeFn func(*alphaNode, Cond) AlphaNode) AlphaNode {
+	base := newAlphaNode(parent)
+	an := makeFn(base, c)
+	if _, ok := an.(sharableAlphaNode); !ok {
+		parent.AddChild(an)
+		return an
+	}
+	h := an.Hash()
+	child := parent.GetChild(h)
+	if child != nil {
+		if shareNode, ok := child.(sharableAlphaNode); ok {
+			shareNode.Adjust(c)
+			return child
+		}
 	}
 
-	newNode := NewConstantTestNode(parent, h, tv, fn)
-
-	if parent.children == nil {
-		parent.children = make(map[uint64]*ConstantTestNode, 2)
-	}
-	parent.children[h] = newNode
-	return newNode
+	parent.AddChild(an)
+	return an
 }
 
 func (n *AlphaNetwork) MakeAlphaMem(c Cond) *AlphaMem {
@@ -391,18 +307,24 @@ func (n *AlphaNetwork) MakeAlphaMem(c Cond) *AlphaMem {
 	if am, in := n.cond2AlphaMem[h]; in {
 		return am
 	}
-	currentNode := n.root
-	currentNode = n.makeConstantTestNode(currentNode, TestTypeAttr, TVString(c.Attr), TestOpEqual.ToFunc())
+
+	var (
+		currentNode = n.root
+	)
+
+	// test type
+	currentNode = n.buildOrShareTestNode(currentNode, c, NewTypeTestNode)
 	if c.Value.Type() != TestValueTypeIdentity {
-		currentNode = n.makeConstantTestNode(currentNode, TestTypeValue, c.Value, c.TestOp.ToFunc())
+		currentNode = n.buildOrShareTestNode(currentNode, c, NewConstantTestNode)
 	}
 
-	if currentNode.outputMem != nil {
-		return currentNode.outputMem
+	// finish building test node
+	if am := currentNode.OutputMem(); am != nil {
+		return am
 	}
 
 	am := newAlphaMem(c, currentNode, n)
-	currentNode.outputMem = am
+	currentNode.SetOutputMem(am)
 	// initialize am with any current working memory
 	for _, w := range n.workingMems {
 		if w.passAllConstantTest(c) {
@@ -446,10 +368,244 @@ func (n *AlphaNetwork) hashCond(c Cond) uint64 {
 	return c.Hash(opt)
 }
 
-func (f Fact) WMEFromFact() *WME {
-	return NewWME(f.ID, f.Field, f.Value)
+// Alpha test nodes
+type (
+	alphaNode struct {
+		parent    AlphaNode            // parent, nil for the root node
+		children  map[uint64]AlphaNode // children node
+		outputMem *AlphaMem
+	}
+
+	AlphaNode interface {
+		Hash() uint64
+		PerformTest(*WME) (bool, error)
+		Parent() AlphaNode
+		SetParent(AlphaNode)
+		IsChild(child AlphaNode) bool
+		AddChild(child AlphaNode)
+		GetChild(hash uint64) AlphaNode
+		RemoveChild(child AlphaNode)
+		NChildren() int
+		SetOutputMem(mem *AlphaMem)
+		OutputMem() *AlphaMem
+		ForEachChild(fn func(AlphaNode) (stop bool))
+	}
+
+	sharableAlphaNode interface {
+		Adjust(c Cond)
+	}
+)
+
+func newAlphaNode(parent AlphaNode) *alphaNode {
+	return &alphaNode{
+		parent:   parent,
+		children: make(map[uint64]AlphaNode),
+	}
 }
 
-func (f Fact) Hash() uint64 {
-	return uint64(mix32(mix32(f.ID.Hash(), f.Field.Hash()), f.Value.Hash()))
+func (n *alphaNode) Parent() AlphaNode {
+	return n.parent
 }
+
+func (n *alphaNode) SetParent(p AlphaNode) {
+	n.parent = p
+}
+
+func (n *alphaNode) IsChild(child AlphaNode) bool {
+	h := child.Hash()
+	_, in := n.children[h]
+	return in
+}
+
+func (n *alphaNode) GetChild(h uint64) AlphaNode {
+	return n.children[h]
+}
+
+func (n *alphaNode) AddChild(child AlphaNode) {
+	h := child.Hash()
+	_, in := n.children[h]
+	if in {
+		return
+	}
+	n.children[h] = child
+}
+
+func (n *alphaNode) ForEachChild(fn func(AlphaNode) (stop bool)) {
+	for _, child := range n.children {
+		if fn(child) {
+			break
+		}
+	}
+}
+
+func (n *alphaNode) RemoveChild(child AlphaNode) {
+	h := child.Hash()
+	delete(n.children, h)
+}
+
+func (n *alphaNode) NChildren() int {
+	return len(n.children)
+}
+
+func (n *alphaNode) SetOutputMem(mem *AlphaMem) {
+	n.outputMem = mem
+}
+
+func (n *alphaNode) OutputMem() *AlphaMem {
+	return n.outputMem
+}
+
+// identify root nodes by Hash() == 0
+func (n *alphaNode) Hash() uint64                   { return 0 }
+func (n *alphaNode) PerformTest(*WME) (bool, error) { return true, nil }
+
+type TypeTestNode struct {
+	*alphaNode       `hash:"ignore"`
+	TypeInfo         *TypeInfo      `hash:"ignore"` // TypeInfo specified in a Cond
+	FieldConstraints map[string]int // field names we learned from conditions, and its reference count(count of cond)
+	Alias            TVIdentity
+}
+
+var _ AlphaNode = (*TypeTestNode)(nil)
+
+func NewTypeTestNode(alphaNode *alphaNode, c Cond) AlphaNode {
+	var (
+		tf               *TypeInfo
+		fieldConstraints map[string]int
+	)
+	if c.AliasType == nil {
+		fieldConstraints = make(map[string]int)
+		if c.AliasAttr != FieldSelf {
+			// must has field c.Attr, but we don't know what type it is
+			// leave it until we perform the test op
+			fieldConstraints = map[string]int{
+				string(c.AliasAttr): 1,
+			}
+		}
+	} else {
+		tf = c.AliasType
+	}
+
+	return &TypeTestNode{
+		alphaNode:        alphaNode,
+		TypeInfo:         tf,
+		Alias:            c.Alias,
+		FieldConstraints: fieldConstraints,
+	}
+}
+
+func (t *TypeTestNode) Adjust(c Cond) {
+	if c.AliasAttr == FieldSelf || c.AliasType != nil {
+		return
+	}
+	// t.RequiredFields is generated by us, we can add more field constrait here by new Cond
+	t.FieldConstraints[string(c.AliasAttr)] = t.FieldConstraints[string(c.AliasAttr)] + 1
+}
+
+func (t *TypeTestNode) PerformTest(w *WME) (bool, error) {
+	if t.TypeInfo != nil {
+		switch t.TypeInfo.T {
+		case TestValueTypeInt, TestValueTypeUint,
+			TestValueTypeFloat, TestValueTypeString:
+			return t.TypeInfo.T == w.Value.Type(), nil
+		case TestValueTypeStruct:
+			return w.Value.Type() == TestValueTypeStruct && t.checkStructType(w), nil
+		case TestValueTypeUnknown:
+			// unknow type ? leave it until we perform the test op
+			return true, nil
+		}
+	} else if len(t.FieldConstraints) > 0 {
+		return w.Value.Type() == TestValueTypeStruct && t.checkFieldConstraints(w), nil
+	}
+	return false, nil
+}
+
+func (t *TypeTestNode) checkFieldConstraints(w *WME) bool {
+	v := w.Value.(*TVStruct).v
+	vt := reflect.TypeOf(v)
+	if vt.Kind() == reflect.Ptr {
+		vt = vt.Elem()
+	}
+	// check whether the struct contains fields in tf
+	for f := range t.FieldConstraints {
+		_, in := vt.FieldByName(f)
+		if !in {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (t *TypeTestNode) checkStructType(w *WME) bool {
+	tf := t.TypeInfo
+	v := w.Value.(*TVStruct).v
+	vt := reflect.TypeOf(v)
+	if vt.Kind() == reflect.Ptr {
+		vt = vt.Elem()
+	}
+	// strict type checking if the reflect.Type is provided
+	if tf.VT != nil {
+		return tf.VT == vt
+	}
+
+	// check whether the struct contains fields in tf
+	for f, t := range tf.Fields {
+		sf, in := vt.FieldByName(f)
+		if !in {
+			return false
+		}
+		if t == TestValueTypeUnknown || t == TestValueTypeStruct {
+			// skip field type checking
+			continue
+		}
+		sft := sf.Type
+		if sft.Kind() == reflect.Ptr {
+			sft = sft.Elem()
+		}
+		if rt := t.RType(); rt != nil && !sft.ConvertibleTo(rt) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (t *TypeTestNode) Hash() uint64 {
+	return hashAny(t)
+}
+
+// ConstantTestNode perform constant test for each WME,
+// and implements by 'Dataflow Network'(see 2.2.1(page 27) in the paper)
+type ConstantTestNode struct {
+	*alphaNode `hash:"ignore"`
+	Field      string    // which field in WME we gonna test
+	V          TestValue // the value to be compared
+	TestOp     TestOp    // test operation
+}
+
+var _ AlphaNode = (*ConstantTestNode)(nil)
+
+func NewConstantTestNode(alphaNode *alphaNode, c Cond) AlphaNode {
+	return &ConstantTestNode{
+		alphaNode: alphaNode,
+		Field:     string(c.AliasAttr),
+		V:         c.Value,
+		TestOp:    c.TestOp,
+	}
+}
+
+func (n *ConstantTestNode) Hash() uint64 {
+	return hashAny(n)
+}
+
+func (n *ConstantTestNode) PerformTest(w *WME) (bool, error) {
+	val2test, err := w.Value.GetField(n.Field)
+	if err != nil {
+		return false, err
+	}
+	fn := n.TestOp.ToFunc()
+	return fn(n.V, val2test), nil
+}
+
+func (t *ConstantTestNode) Adjust(c Cond) {}

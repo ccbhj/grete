@@ -1,14 +1,12 @@
 package rete
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/ccbhj/grete/internal/log"
+)
 
 type (
-	Fact struct {
-		ID    TVIdentity
-		Field TVString
-		Value TestValue
-	}
-
 	Token struct {
 		parent *Token
 		wme    *WME // dummy node if wme == nil
@@ -163,29 +161,103 @@ func (bm *BetaMem) leftActivate(token *Token, wme *WME) int {
 }
 
 type (
+	// JoinTestType specify which field of a WME we are going to be tested at the JoinTestNode
+	JoinTestType   int
 	TestAtJoinNode struct {
-		fieldOfArg1      TestType
-		fieldOfArg2      TestType
-		condOffsetOfArg2 int
+		LhsAttr      string // Attrs of Lhs and RhsAttr
+		RhsAttr      string // Attrs of Rhs and RhsAttr, rhs is usually a wme that matches previous conds.
+		CondOffRhs   int    // the offset in a token list where the Y is extract from, which is matched the exact cond that refer the lhs's alias.
+		TestOp       TestOp // TestOp to perform on Lhs and Rhs, the order matters
+		ReverseOrder bool   // whether to reverse order when performing test on rhs and lhs
 	}
 
 	JoinNode struct {
 		ReteNode
 		amem                        *AlphaMem
 		tests                       []*TestAtJoinNode
+		testSum                     uint64
 		nearestAncestorWithSameAmem ReteNode
 		betaMem                     *BetaMem // one of then children, for speeding up the construction
 		bn                          *BetaNetwork
 	}
 )
 
-var _ BetaNode = (*JoinNode)(nil)
-
-func (t TestAtJoinNode) equal(other TestAtJoinNode) bool {
-	return t.fieldOfArg1 == other.fieldOfArg1 &&
-		t.fieldOfArg2 == other.fieldOfArg2 &&
-		t.condOffsetOfArg2 == other.condOffsetOfArg2
+func (t TestAtJoinNode) Equal(other TestAtJoinNode) bool {
+	return t.LhsAttr == other.LhsAttr &&
+		t.RhsAttr == other.RhsAttr &&
+		t.CondOffRhs == other.CondOffRhs
 }
+
+func (t TestAtJoinNode) Hash() uint64 {
+	return hashAny(t)
+}
+
+func (t TestAtJoinNode) performTest(x, y *WME) bool {
+	xv, err := x.GetAttrValue(t.LhsAttr)
+	if err != nil {
+		log.L("fail to get %s of X: %s", t.LhsAttr, err)
+		return false
+	}
+	log.BugOn(xv != nil, "attr %s of X must not be nil", t.LhsAttr)
+
+	yv, err := y.GetAttrValue(t.RhsAttr)
+	if err != nil {
+		log.L("fail to get %s of Y: %s", t.RhsAttr, err)
+		return false
+	}
+	log.BugOn(yv != nil, "attr %s of Y must not be nil", t.RhsAttr)
+
+	testFn := t.TestOp.ToFunc()
+	if t.ReverseOrder {
+		return testFn(yv, xv)
+	}
+	return testFn(xv, yv)
+}
+
+func buildJoinTestFromConds(c Cond, prevConds []Cond) []*TestAtJoinNode {
+	ret := make([]*TestAtJoinNode, 0, 2)
+	id, val := c.Alias, c.Value
+	// each condition will mapped to a token
+	for i := len(prevConds) - 1; i >= 0; i-- {
+		addNode := func(lhs, rhs string, testOp TestOp, ro bool) {
+			ret = append(ret, &TestAtJoinNode{
+				LhsAttr:      lhs,
+				RhsAttr:      rhs,
+				CondOffRhs:   len(prevConds) - i - 1,
+				TestOp:       testOp,
+				ReverseOrder: ro,
+			})
+		}
+		prevCond := prevConds[i]
+
+		if prevCond.Alias == id {
+			// JT(ID, ID)
+			addNode(FieldID, FieldID, TestOpEqual, false)
+		}
+		if prevCond.Value.Type() == TestValueTypeIdentity && prevCond.Value == id {
+			// JT(ID, Value) -> JT(Self, Value)
+			// When performing test between ID and Value, we should use FieldSelf instead of FieldID,
+			// Attention: the lhs and rhs order must be reversed here
+			addNode(FieldSelf, string(prevCond.AliasAttr), prevCond.TestOp, true)
+		}
+
+		if isIdentity(val) {
+			switch {
+			case prevCond.Alias == val:
+				// JT(Value, ID)
+				// When performing test between ID and Value, we should use FieldSelf instead of FieldID
+				addNode(string(c.AliasAttr), FieldSelf, c.TestOp, false)
+			case isIdentity(prevCond.Value) && prevCond.Value == val:
+				// JT(Value, Value)
+				addNode(string(c.AliasAttr), string(prevCond.AliasAttr), TestOpEqual, false)
+			}
+		}
+	}
+
+	return ret
+}
+
+var _ BetaNode = (*JoinNode)(nil)
 
 func newJoinNode(bn *BetaNetwork, parent ReteNode, amem *AlphaMem,
 	tests []*TestAtJoinNode, nearestAncestorWithSameAmem ReteNode) *JoinNode {
@@ -194,6 +266,7 @@ func newJoinNode(bn *BetaNetwork, parent ReteNode, amem *AlphaMem,
 		amem:                        amem,
 		tests:                       tests,
 		nearestAncestorWithSameAmem: nearestAncestorWithSameAmem,
+		testSum:                     calJoinTestSum(tests),
 	}
 	jn.ReteNode = NewReteNode(parent, jn)
 	// order is matter
@@ -201,22 +274,27 @@ func newJoinNode(bn *BetaNetwork, parent ReteNode, amem *AlphaMem,
 	return jn
 }
 
+func calJoinTestSum(tests []*TestAtJoinNode) uint64 {
+	sum := uint64(len(tests))
+	for _, t := range tests {
+		sum = mix64(sum, t.Hash())
+	}
+	return sum
+}
+
 func performTests(tests []*TestAtJoinNode, tk *Token, wme *WME) bool {
 	if tk.wme == nil {
 		// this is a dummy token(see papar page 25)
 		return true
 	}
-	for i := 0; i < len(tests); i++ {
-		thisTest := tests[i]
-		arg1 := thisTest.fieldOfArg1.GetField(wme)
-
+	for _, test := range tests {
 		p := tk
-		for off := thisTest.condOffsetOfArg2; off > 0; off-- {
+		for off := test.CondOffRhs; off > 0; off-- {
 			p = p.parent
 		}
-		otherWME := p.wme
-		arg2 := thisTest.fieldOfArg2.GetField(otherWME)
-		if !TestEqual(arg1, arg2) {
+		log.BugOn(p != nil, "p must never be nil")
+		lhs, rhs := wme, p.wme
+		if !test.performTest(lhs, rhs) {
 			return false
 		}
 	}
@@ -334,7 +412,7 @@ func (pn *PNode) Matches() []map[TVIdentity]Fact {
 		j := len(pn.lhs) - 1
 		match := make(map[TVIdentity]Fact, len(pn.lhs))
 		for ; item.wme != nil; item, j = item.parent, j-1 {
-			id := pn.lhs[j].ID
+			id := pn.lhs[j].Alias
 			wme := item.wme
 			match[id] = wme.FactOfWME()
 		}
@@ -357,42 +435,6 @@ func NewBetaNetwork(an *AlphaNetwork) *BetaNetwork {
 	}
 }
 
-func getJoinTestFromConds(c Cond, prevConds []Cond) []*TestAtJoinNode {
-	ret := make([]*TestAtJoinNode, 0, 2)
-	id, val := c.ID, c.Value
-	// each condition will mapped to a token
-	for i := len(prevConds) - 1; i >= 0; i-- {
-		addNode := func(fieldOfArg1, fieldOfArg2 TestType) {
-			ret = append(ret, &TestAtJoinNode{
-				fieldOfArg1:      fieldOfArg1,
-				fieldOfArg2:      fieldOfArg2,
-				condOffsetOfArg2: len(prevConds) - i - 1,
-			})
-		}
-		prevCond := prevConds[i]
-
-		// check id
-		if prevCond.ID == id {
-			addNode(TestTypeID, TestTypeID)
-		}
-		if isIdentity(prevCond.Value) && prevCond.Value == id {
-			addNode(TestTypeID, TestTypeValue)
-		}
-
-		// check value
-		if isIdentity(val) {
-			if prevCond.ID == val {
-				addNode(TestTypeValue, TestTypeID)
-			}
-			if isIdentity(prevCond.Value) && prevCond.Value == val {
-				addNode(TestTypeValue, TestTypeValue)
-			}
-		}
-	}
-
-	return ret
-}
-
 func (bn *BetaNetwork) buildOrShareNetwork(parent ReteNode, conds []Cond, earlierConds []Cond) ReteNode {
 	var (
 		currentNode   ReteNode
@@ -407,7 +449,7 @@ func (bn *BetaNetwork) buildOrShareNetwork(parent ReteNode, conds []Cond, earlie
 			currentNode = bn.buildOrShareBetaMem(currentNode)
 			currentNode = bn.buildOrShareJoinNode(currentNode,
 				bn.an.MakeAlphaMem(c),
-				getJoinTestFromConds(c, condsHigherUp))
+				buildJoinTestFromConds(c, condsHigherUp))
 		case c.Negative:
 			// TODO: support negative node
 		}
@@ -421,6 +463,7 @@ func (bn *BetaNetwork) buildOrShareJoinNode(parent ReteNode, am *AlphaMem, tests
 	var (
 		rn      = parent
 		hitNode *JoinNode
+		testSum = calJoinTestSum(tests)
 	)
 	rn.ForEachChild(func(child ReteNode) (stop bool) {
 		jn, ok := child.(*JoinNode)
@@ -428,12 +471,7 @@ func (bn *BetaNetwork) buildOrShareJoinNode(parent ReteNode, am *AlphaMem, tests
 			return false
 		}
 		// compare alpha memory and tests
-		if jn.amem == am && len(jn.tests) == len(tests) {
-			for i := 0; i < len(jn.tests); i++ {
-				if !jn.tests[i].equal(*tests[i]) {
-					return false
-				}
-			}
+		if jn.amem == am && jn.testSum == testSum {
 			hitNode = jn
 			return true
 		}
@@ -551,7 +589,7 @@ func (bn *BetaNetwork) GetProduction(id string) *PNode {
 	return n
 }
 
-// RemoveProduction remove a production by a production id, along with all the fact
+// RemoveProduction remove a production by a production id, along with all the facts
 // related with it.
 // TODO: provide an option for reserving fact, we can just delete the pnode and its parent, grandparent and grand..grandparent if they are not shared, and leave the alpha mem so that it can still be shared and will not activate any successors if there is none
 func (bn *BetaNetwork) RemoveProduction(id string) error {

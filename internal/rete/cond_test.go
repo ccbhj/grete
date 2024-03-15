@@ -11,11 +11,11 @@ var _ = Describe("Cond", func() {
 	var cond *Cond
 	BeforeEach(func() {
 		cond = &Cond{
-			ID:       "Foo",
-			Attr:     "field",
-			Value:    TVString("bar"),
-			Negative: false,
-			TestOp:   TestOpLess,
+			Alias:     "Foo",
+			AliasAttr: "field",
+			Value:     TVString("bar"),
+			Negative:  false,
+			TestOp:    TestOpLess,
 		}
 	})
 
@@ -36,7 +36,7 @@ var _ = Describe("Cond", func() {
 		opt := CondHashOptMaskID
 		hash := cond.Hash(opt)
 		otherCond := cond
-		otherCond.ID = "Bar"
+		otherCond.Alias = "Bar"
 		Expect(otherCond).NotTo(BeZero())
 		Expect(hash).Should(BeEquivalentTo(otherCond.Hash(opt)))
 	})

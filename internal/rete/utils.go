@@ -1,6 +1,11 @@
 package rete
 
 import (
+	"encoding/binary"
+	"hash/fnv"
+	"math/bits"
+
+	H "github.com/mitchellh/hashstructure/v2"
 	"github.com/zyedidia/generic/list"
 )
 
@@ -79,4 +84,36 @@ func listToSlice[T any](l *list.List[T]) []T {
 
 func isIdentity(tv TestValue) bool {
 	return tv.Type() == TestValueTypeIdentity
+}
+
+func hashAny(v any) uint64 {
+	h, err := H.Hash(v, H.FormatV2, &H.HashOptions{})
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
+// hash32 generate hash of an uint64
+func hash32(v uint64) uint32 {
+	h := fnv.New32a()
+	if err := binary.Write(h, binary.LittleEndian, v); err != nil {
+		panic(err)
+	}
+
+	return h.Sum32()
+}
+
+// mix32 mixes two uint32 into one
+func mix32(x, y uint32) uint32 {
+	// 0x53c5ca59 and 0x74743c1b are magic numbers from wyhash32(see https://github.com/wangyi-fudan/wyhash/blob/master/wyhash32.h)
+	c := uint64(x ^ 0x53c5ca59)
+	c *= uint64(y ^ 0x74743c1b)
+	return hash32(c)
+}
+
+// mix64 mixes two uint64 into one
+func mix64(x, y uint64) uint64 {
+	hi, lo := bits.Mul64(x, y)
+	return hi ^ lo
 }

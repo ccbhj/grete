@@ -1,98 +1,141 @@
-package rete_test
+package rete
 
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
-
-	. "github.com/ccbhj/grete/internal/rete"
 )
 
-func getTestFacts() []Fact {
-	return []Fact{
-		{ID: "B1", Field: "on", Value: TVIdentity("B2")},
-		{ID: "B1", Field: "on", Value: TVIdentity("B3")},
-		{ID: "B1", Field: "color", Value: TVString("red")},
-		{ID: "B2", Field: "on", Value: TVString("table")},
-		{ID: "B2", Field: "left-of", Value: TVIdentity("B3")},
-		{ID: "B2", Field: "color", Value: TVString("blue")},
-		{ID: "B3", Field: "left-of", Value: TVIdentity("B4")},
-		{ID: "B3", Field: "on", Value: TVString("table")},
-		{ID: "B3", Field: "color", Value: TVString("red")},
-	}
-}
-
-var testConds = []Cond{
-	{
-		ID:     TVIdentity("x"),
-		Attr:   "on",
-		Value:  TVIdentity("y"),
-		TestOp: TestOpEqual,
-	},
-	{
-		ID:     TVIdentity("y"),
-		Attr:   "left-of",
-		Value:  TVIdentity("z"),
-		TestOp: TestOpEqual,
-	},
-	{
-		ID:     TVIdentity("z"),
-		Attr:   "color",
-		Value:  TVString("red"),
-		TestOp: TestOpEqual,
-	},
-	{
-		ID:     TVIdentity("z"),
-		Attr:   "color",
-		Value:  TVString("maize"),
-		TestOp: TestOpEqual,
-	},
-	{
-		ID:     TVIdentity("b"),
-		Attr:   "color",
-		Value:  TVString("blue"),
-		TestOp: TestOpEqual,
-	},
-	{
-		ID:     TVIdentity("c"),
-		Attr:   "color",
-		Value:  TVString("green"),
-		TestOp: TestOpEqual,
-	},
-	{
-		ID:     TVIdentity("d"),
-		Attr:   "color",
-		Value:  TVString("white"),
-		TestOp: TestOpEqual,
-	},
-	{
-		ID:     TVIdentity("s"),
-		Attr:   "on",
-		Value:  TVString("table"),
-		TestOp: TestOpEqual,
-	},
-	{
-		ID:     TVIdentity("y"),
-		Attr:   "a",
-		Value:  TVString("b"),
-		TestOp: TestOpEqual,
-	},
-	{
-		ID:     TVIdentity("a"),
-		Attr:   "left-of",
-		Value:  TVString("d"),
-		TestOp: TestOpEqual,
-	},
-}
-
-func collect[T any](forEachFn func(func(T) (stop bool))) []T {
-	arr := make([]T, 0, 2)
-	forEachFn(func(t T) bool {
-		arr = append(arr, t)
-		return false
+var _ = Describe("JoinTest", func() {
+	var (
+		chessTab *Chess
+		chessX   *Chess
+		toWME    = func(c *Chess) *WME {
+			return &WME{
+				ID:    c.ID,
+				Value: NewTVStruct(c),
+			}
+		}
+	)
+	BeforeEach(func() {
+		chessTab = &Chess{
+			ID: "table",
+		}
+		chessX = &Chess{
+			ID:    "x",
+			Color: "red",
+			On:    chessTab,
+			Rank:  10,
+		}
 	})
-	return arr
-}
+
+	When("building join test", func() {
+		It("won't generate join test for constant testing without duplicated alias", func() {
+			c1 := Cond{
+				Alias:     "X",
+				AliasAttr: "Color",
+				Value:     TVString("red"),
+			}
+			c2 := Cond{
+				Alias:     "Y",
+				AliasAttr: "On",
+				Value:     TVString("table"),
+			}
+
+			Expect(buildJoinTestFromConds(c1, nil)).Should(BeEmpty())
+			Expect(buildJoinTestFromConds(c2, []Cond{c1})).Should(BeEmpty())
+		})
+
+		It("can generate join tests for conds with same alias", func() {
+			c1 := Cond{
+				Alias:     "TABLE",
+				AliasAttr: "Rank",
+				Value:     TVInt(0),
+			}
+			c2 := Cond{
+				Alias:     "TABLE",
+				AliasAttr: "On",
+				Value:     NewTVNil(),
+			}
+			c3 := Cond{
+				Alias:     "TABLE",
+				AliasAttr: "Color",
+				Value:     TVString(""),
+			}
+			Expect(buildJoinTestFromConds(c1, nil)).Should(BeEmpty())
+			jts := buildJoinTestFromConds(c2, []Cond{c1})
+			if Expect(jts).Should(HaveLen(1)) {
+				Expect(jts[0].performTest(toWME(chessTab), toWME(chessTab))).Should(BeTrue())
+			}
+
+			jts = buildJoinTestFromConds(c3, []Cond{c1, c2})
+			if Expect(jts).Should(HaveLen(2)) {
+				Expect(jts[0]).To(Equal(&TestAtJoinNode{
+					LhsAttr:    FieldID,
+					RhsAttr:    FieldID,
+					CondOffRhs: 0,
+				}))
+				Expect(jts[0].performTest(toWME(chessTab), toWME(chessTab))).Should(BeTrue())
+				Expect(jts[1]).To(Equal(&TestAtJoinNode{
+					LhsAttr:    FieldID,
+					RhsAttr:    FieldID,
+					CondOffRhs: 1,
+				}))
+				Expect(jts[1].performTest(toWME(chessTab), toWME(chessTab))).Should(BeTrue())
+			}
+		})
+
+		It("can generate join tests between one cond's ID and previous cond's Value", func() {
+			c1 := Cond{
+				Alias:     "X",
+				AliasAttr: "On",
+				Value:     TVIdentity("TABLE"),
+			}
+			c2 := Cond{
+				Alias:     "TABLE",
+				AliasAttr: "Color",
+				Value:     TVString(""),
+			}
+			Expect(buildJoinTestFromConds(c1, nil)).Should(BeEmpty())
+			jts := buildJoinTestFromConds(c2, []Cond{c1})
+			if Expect(jts).Should(HaveLen(1)) {
+				jt := jts[0]
+				Expect(jt).To(Equal(&TestAtJoinNode{
+					LhsAttr:      FieldSelf,
+					RhsAttr:      "On",
+					CondOffRhs:   0,
+					ReverseOrder: true,
+				}))
+				Expect(jt.performTest(toWME(chessTab), toWME(chessX)))
+			}
+		})
+
+		It("can generate join tests between one cond's Value and previous cond's ID", func() {
+			c1 := Cond{
+				Alias:     "TABLE",
+				AliasAttr: "Color",
+				Value:     TVString(""),
+			}
+			c2 := Cond{
+				Alias:     "X",
+				AliasAttr: "On",
+				Value:     TVIdentity("TABLE"),
+			}
+			Expect(buildJoinTestFromConds(c1, nil)).Should(BeEmpty())
+			jts := buildJoinTestFromConds(c2, []Cond{c1})
+			if Expect(jts).Should(HaveLen(1)) {
+				jt := jts[0]
+				Expect(jt).To(Equal(&TestAtJoinNode{
+					LhsAttr:    "On",
+					RhsAttr:    FieldSelf,
+					CondOffRhs: 0,
+				}))
+				Expect(jt.performTest(toWME(chessX), toWME(chessTab))).To(BeTrue())
+			}
+		})
+
+	})
+})
 
 var _ = Describe("BetaNet", func() {
 	var (
@@ -118,10 +161,10 @@ var _ = Describe("BetaNet", func() {
 		When("adding production", func() {
 			It("can add an single production", func() {
 				pNode := bn.AddProduction("test", Cond{
-					ID:     "x",
-					Attr:   "color",
-					Value:  TVString("red"),
-					TestOp: TestOpEqual,
+					Alias:     "x",
+					AliasAttr: "Color",
+					Value:     TVString("red"),
+					TestOp:    TestOpEqual,
 				})
 				Expect(pNode.AnyMatches()).To(BeFalse())
 				if Expect(pNode.Parent()).To(BeAssignableToTypeOf(&JoinNode{})) {
@@ -135,22 +178,22 @@ var _ = Describe("BetaNet", func() {
 			It("can add production with more than one condition", func() {
 				pNode := bn.AddProduction("test case from Fig2.2 in paper",
 					Cond{
-						ID:     TVIdentity("x"),
-						Attr:   "on",
-						Value:  TVIdentity("y"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("x"),
+						AliasAttr: "On",
+						Value:     TVIdentity("y"),
+						TestOp:    TestOpEqual,
 					},
 					Cond{
-						ID:     TVIdentity("y"),
-						Attr:   "left-of",
-						Value:  TVIdentity("z"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("y"),
+						AliasAttr: "LeftOf",
+						Value:     TVIdentity("z"),
+						TestOp:    TestOpEqual,
 					},
 					Cond{
-						ID:     TVIdentity("z"),
-						Attr:   "color",
-						Value:  TVString("red"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("z"),
+						AliasAttr: "Color",
+						Value:     TVString("red"),
+						TestOp:    TestOpEqual,
 					})
 
 				Expect(pNode.AnyMatches()).To(BeFalse())
@@ -179,18 +222,18 @@ var _ = Describe("BetaNet", func() {
 				const ruleID = "single rule"
 				px := bn.AddProduction(ruleID,
 					Cond{
-						ID:     TVIdentity("z"),
-						Attr:   "color",
-						Value:  TVString("red"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("z"),
+						AliasAttr: "Color",
+						Value:     TVString("red"),
+						TestOp:    TestOpEqual,
 					})
 
 				py := bn.AddProduction(ruleID,
 					Cond{
-						ID:     TVIdentity("z"),
-						Attr:   "color",
-						Value:  TVString("red"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("z"),
+						AliasAttr: "Color",
+						Value:     TVString("red"),
+						TestOp:    TestOpEqual,
 					})
 				Expect(px).To(BeEquivalentTo(py))
 
@@ -201,42 +244,42 @@ var _ = Describe("BetaNet", func() {
 			It("can share same beta memory", func() {
 				pNodeX := bn.AddProduction("X",
 					Cond{
-						ID:     TVIdentity("x"),
-						Attr:   "on",
-						Value:  TVIdentity("y"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("x"),
+						AliasAttr: "On",
+						Value:     TVIdentity("y"),
+						TestOp:    TestOpEqual,
 					},
 					Cond{
-						ID:     TVIdentity("y"),
-						Attr:   "left-of",
-						Value:  TVIdentity("z"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("y"),
+						AliasAttr: "LeftOf",
+						Value:     TVIdentity("z"),
+						TestOp:    TestOpEqual,
 					},
 					Cond{
-						ID:     TVIdentity("z"),
-						Attr:   "color",
-						Value:  TVString("red"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("z"),
+						AliasAttr: "Color",
+						Value:     TVString("red"),
+						TestOp:    TestOpEqual,
 					})
 
 				pNodeY := bn.AddProduction("Y",
 					Cond{
-						ID:     TVIdentity("x"),
-						Attr:   "on",
-						Value:  TVIdentity("y"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("x"),
+						AliasAttr: "On",
+						Value:     TVIdentity("y"),
+						TestOp:    TestOpEqual,
 					},
 					Cond{
-						ID:     TVIdentity("y"),
-						Attr:   "left-of",
-						Value:  TVIdentity("z"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("y"),
+						AliasAttr: "LeftOf",
+						Value:     TVIdentity("z"),
+						TestOp:    TestOpEqual,
 					},
 					Cond{ // diferent rule here
-						ID:     TVIdentity("z"),
-						Attr:   "color",
-						Value:  TVString("blue"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("z"),
+						AliasAttr: "Color",
+						Value:     TVString("blue"),
+						TestOp:    TestOpEqual,
 					})
 
 				Expect(pNodeX.Parent().Parent()).To(BeIdenticalTo(pNodeY.Parent().Parent()))
@@ -244,24 +287,42 @@ var _ = Describe("BetaNet", func() {
 		})
 
 		When("removing production", func() {
-			var redFact []Fact
+			var (
+				testChesses    []*Chess
+				testChessFacts []Fact
+				redChesses     []*Chess
+				redChessFacts  []Fact
+			)
 			BeforeEach(func() {
-				redFact = lo.Filter(getTestFacts(), func(item Fact, index int) bool {
-					return item.Field == "color" && item.Value == TVString("red")
+				testChesses = getTestFacts()
+				testChessFacts = lo.Map(testChesses, func(item *Chess, index int) Fact {
+					return Fact{
+						ID:    item.ID,
+						Value: NewTVStruct(item),
+					}
+				})
+				redChesses = lo.Filter(testChesses, func(item *Chess, index int) bool {
+					return item.Color == "red"
+				})
+				redChessFacts = lo.Map(redChesses, func(item *Chess, index int) Fact {
+					return Fact{
+						ID:    item.ID,
+						Value: NewTVStruct(item),
+					}
 				})
 			})
 
 			It("can remove a single rule", func() {
 				const ruleName = "single_rule"
 				singleRule := bn.AddProduction(ruleName, Cond{
-					ID:     "x",
-					Attr:   "color",
-					Value:  TVString("red"),
-					TestOp: TestOpEqual,
+					Alias:     "X",
+					AliasAttr: "Color",
+					Value:     TVString("red"),
+					TestOp:    TestOpEqual,
 				})
-				lo.ForEach(redFact, func(item Fact, _ int) { bn.AddFact(item) })
+				lo.ForEach(redChessFacts, ignoreIndex(bn.AddFact))
 				p := singleRule.Parent()
-				Expect(p.AnyChild()).ShouldNot(BeFalse())
+				Expect(p.AnyChild()).Should(BeTrue())
 				Expect(collect(p.ForEachChild)).ShouldNot(BeEmpty())
 				Expect(singleRule.Matches()).ShouldNot(BeEmpty())
 
@@ -274,17 +335,17 @@ var _ = Describe("BetaNet", func() {
 
 				// now add it again...
 				singleRule = bn.AddProduction(ruleName, Cond{
-					ID:     "x",
-					Attr:   "color",
-					Value:  TVString("red"),
-					TestOp: TestOpEqual,
+					Alias:     "x",
+					AliasAttr: "Color",
+					Value:     TVString("red"),
+					TestOp:    TestOpEqual,
 				})
 				Expect(singleRule).ShouldNot(BeNil())
 				p = singleRule.Parent()
 				Expect(p.AnyChild()).ShouldNot(BeFalse())
 				Expect(collect(p.ForEachChild)).ShouldNot(BeEmpty())
 
-				lo.ForEach(redFact, func(item Fact, _ int) { bn.AddFact(item) })
+				lo.ForEach(redChessFacts, ignoreIndex(bn.AddFact))
 				Expect(singleRule.Matches()).ShouldNot(BeEmpty())
 			})
 
@@ -292,29 +353,29 @@ var _ = Describe("BetaNet", func() {
 				const ruleName = "multi_rule"
 				rules := []Cond{
 					{
-						ID:     TVIdentity("x"),
-						Attr:   "on",
-						Value:  TVIdentity("y"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("x"),
+						AliasAttr: "On",
+						Value:     TVIdentity("y"),
+						TestOp:    TestOpEqual,
 					},
 					{
-						ID:     TVIdentity("y"),
-						Attr:   "left-of",
-						Value:  TVIdentity("z"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("y"),
+						AliasAttr: "LeftOf",
+						Value:     TVIdentity("z"),
+						TestOp:    TestOpEqual,
 					},
 					{
-						ID:     TVIdentity("z"),
-						Attr:   "color",
-						Value:  TVString("red"),
-						TestOp: TestOpEqual,
+						Alias:     TVIdentity("z"),
+						AliasAttr: "Color",
+						Value:     TVString("red"),
+						TestOp:    TestOpEqual,
 					}}
 				multiRule := bn.AddProduction(ruleName, rules...)
 
 				p := multiRule.Parent()
 				Expect(p.AnyChild()).ShouldNot(BeFalse())
 				Expect(collect(p.ForEachChild)).ShouldNot(BeEmpty())
-				lo.ForEach(getTestFacts(), func(item Fact, _ int) { bn.AddFact(item) })
+				lo.ForEach(testChessFacts, ignoreIndex(bn.AddFact))
 				Expect(multiRule.Matches()).ShouldNot(BeEmpty())
 
 				// now remove it
@@ -325,68 +386,113 @@ var _ = Describe("BetaNet", func() {
 
 				// now add it again...
 				multiRule = bn.AddProduction(ruleName, Cond{
-					ID:     "x",
-					Attr:   "color",
-					Value:  TVString("red"),
-					TestOp: TestOpEqual,
+					Alias:     "X",
+					AliasAttr: "Color",
+					Value:     TVString("red"),
+					TestOp:    TestOpEqual,
 				})
 				Expect(multiRule).ShouldNot(BeNil())
 				p = multiRule.Parent()
 				Expect(p.AnyChild()).ShouldNot(BeFalse())
 				Expect(collect(p.ForEachChild)).ShouldNot(BeEmpty())
 
-				lo.ForEach(getTestFacts(), func(item Fact, _ int) { bn.AddFact(item) })
+				lo.ForEach(testChessFacts, ignoreIndex(bn.AddFact))
 				Expect(multiRule.Matches()).ShouldNot(BeEmpty())
 			})
-
 		})
-
 	})
 
 	When("adding/removing facts", func() {
 		var (
-			singleRule *PNode
-			multiRule  *PNode
+			singleRule   *PNode
+			multiRule    *PNode
+			testChesses  []*Chess
+			getTestChess = func() []*Chess {
+				var chess [4]*Chess
+				for i := 0; i < len(chess); i++ {
+					chess[i] = new(Chess)
+				}
+
+				*chess[0] = Chess{
+					ID:    "B1",
+					Color: "red",
+					On:    chess[1],
+				}
+				*chess[1] = Chess{
+					ID:     "B2",
+					Color:  "blue",
+					LeftOf: chess[2],
+					On:     chess[3],
+				}
+				*chess[2] = Chess{
+					ID:    "B3",
+					On:    chess[3],
+					Color: "red",
+				}
+				*chess[3] = Chess{
+					ID: "table",
+				}
+				return chess[:]
+			}
 		)
 		BeforeEach(func() {
+			testChesses = getTestChess()
 			singleRule = bn.AddProduction("single_rule", Cond{
-				ID:     "x",
-				Attr:   "color",
-				Value:  TVString("red"),
-				TestOp: TestOpEqual,
+				Alias:     "x",
+				AliasAttr: "Color",
+				Value:     TVString("red"),
+				TestOp:    TestOpEqual,
 			})
 
-			multiRule = bn.AddProduction("test case from Fig2.2 in paper",
+			multiRule = bn.AddProduction("multi_rule",
 				Cond{
-					ID:     TVIdentity("x"),
-					Attr:   "on",
-					Value:  TVIdentity("y"),
-					TestOp: TestOpEqual,
+					Alias:     TVIdentity("table"),
+					AliasAttr: "On",
+					Value:     NewTVNil(),
+					TestOp:    TestOpEqual,
 				},
 				Cond{
-					ID:     TVIdentity("y"),
-					Attr:   "left-of",
-					Value:  TVIdentity("z"),
-					TestOp: TestOpEqual,
+					Alias:     TVIdentity("x"),
+					AliasAttr: "On",
+					Value:     TVIdentity("y"),
+					TestOp:    TestOpEqual,
 				},
 				Cond{
-					ID:     TVIdentity("z"),
-					Attr:   "color",
-					Value:  TVString("red"),
-					TestOp: TestOpEqual,
-				})
+					Alias:     TVIdentity("y"),
+					AliasAttr: "LeftOf",
+					Value:     TVIdentity("z"),
+					TestOp:    TestOpEqual,
+				},
+				Cond{
+					Alias:     TVIdentity("z"),
+					AliasAttr: "Color",
+					Value:     TVString("red"),
+					TestOp:    TestOpEqual,
+				},
+				Cond{
+					Alias:     TVIdentity("z"),
+					AliasAttr: "On",
+					Value:     TVIdentity("table"),
+					TestOp:    TestOpEqual,
+				},
+			)
 
-			lo.ForEach(getTestFacts(), func(f Fact, _ int) { bn.AddFact(f) })
+			lo.ForEach(testChesses, func(c *Chess, _ int) {
+				bn.AddFact(Fact{
+					ID:    TVIdentity(c.ID),
+					Value: NewTVStruct(c),
+				})
+			})
 		})
 
 		Context("matching facts with single rule", func() {
 			var (
-				redFact []Fact
+				redFact []*Chess
 				matches []map[TVIdentity]Fact
 			)
 			BeforeEach(func() {
-				redFact = lo.Filter(getTestFacts(), func(f Fact, idx int) bool {
-					return f.Field == "color" && f.Value == TVString("red")
+				redFact = lo.Filter(testChesses, func(f *Chess, idx int) bool {
+					return f.Color == "red"
 				})
 				matches = singleRule.Matches()
 			})
@@ -395,23 +501,35 @@ var _ = Describe("BetaNet", func() {
 				Expect(matches).Should(HaveLen(len(redFact)))
 				for _, fact := range redFact {
 					Expect(matches).To(ContainElement(map[TVIdentity]Fact{
-						"x": fact,
+						"x": {
+							ID:    TVIdentity(fact.ID),
+							Value: NewTVStruct(fact),
+						},
 					}))
 				}
 			})
 
 			It("should still match some facts after removing one", func() {
-				bn.RemoveFact(redFact[0])
+				bn.RemoveFact(Fact{
+					ID:    TVIdentity(redFact[0].ID),
+					Value: NewTVStruct(redFact[0]),
+				})
 				for _, fact := range redFact[1:] {
 					Expect(matches).To(ContainElement(map[TVIdentity]Fact{
-						"x": fact,
+						"x": {
+							ID:    TVIdentity(fact.ID),
+							Value: NewTVStruct(fact),
+						},
 					}))
 				}
 			})
 
 			It("should not match any facts after removing all", func() {
 				for _, fact := range redFact {
-					bn.RemoveFact(fact)
+					bn.RemoveFact(Fact{
+						ID:    TVIdentity(fact.ID),
+						Value: NewTVStruct(fact),
+					})
 				}
 				Expect(singleRule.AnyMatches()).Should(BeFalse())
 			})
@@ -423,14 +541,15 @@ var _ = Describe("BetaNet", func() {
 				matches := multiRule.Matches()
 				Expect(matches).To(HaveLen(1))
 				Expect(matches[0]).Should(And(
-					HaveKeyWithValue(TVIdentity("x"), Fact{ID: "B1", Field: "on", Value: TVIdentity("B2")}),
-					HaveKeyWithValue(TVIdentity("y"), Fact{ID: "B2", Field: "left-of", Value: TVIdentity("B3")}),
-					HaveKeyWithValue(TVIdentity("z"), Fact{ID: "B3", Field: "color", Value: TVString("red")}),
+					HaveKeyWithValue(TVIdentity("x"), Fact{ID: TVIdentity(testChesses[0].ID), Value: NewTVStruct(testChesses[0])}),
+					HaveKeyWithValue(TVIdentity("y"), Fact{ID: TVIdentity(testChesses[1].ID), Value: NewTVStruct(testChesses[1])}),
+					HaveKeyWithValue(TVIdentity("z"), Fact{ID: TVIdentity(testChesses[2].ID), Value: NewTVStruct(testChesses[2])}),
+					HaveKeyWithValue(TVIdentity("table"), Fact{ID: TVIdentity(testChesses[3].ID), Value: NewTVStruct(testChesses[3])}),
 				))
 			})
 
 			It("should not match any facts after removing one of the matched fact", func() {
-				f := Fact{ID: "B1", Field: "on", Value: TVIdentity("B2")}
+				f := Fact{ID: TVIdentity(testChesses[3].ID), Value: NewTVStruct(testChesses[3])}
 				bn.RemoveFact(f)
 				Expect(multiRule.AnyMatches()).Should(BeFalse())
 
@@ -439,12 +558,27 @@ var _ = Describe("BetaNet", func() {
 				matches := multiRule.Matches()
 				Expect(matches).To(HaveLen(1))
 				Expect(matches[0]).Should(And(
-					HaveKeyWithValue(TVIdentity("x"), Fact{ID: "B1", Field: "on", Value: TVIdentity("B2")}),
-					HaveKeyWithValue(TVIdentity("y"), Fact{ID: "B2", Field: "left-of", Value: TVIdentity("B3")}),
-					HaveKeyWithValue(TVIdentity("z"), Fact{ID: "B3", Field: "color", Value: TVString("red")}),
+					HaveKeyWithValue(TVIdentity("x"), Fact{ID: TVIdentity(testChesses[0].ID), Value: NewTVStruct(testChesses[0])}),
+					HaveKeyWithValue(TVIdentity("y"), Fact{ID: TVIdentity(testChesses[1].ID), Value: NewTVStruct(testChesses[1])}),
+					HaveKeyWithValue(TVIdentity("z"), Fact{ID: TVIdentity(testChesses[2].ID), Value: NewTVStruct(testChesses[2])}),
+					HaveKeyWithValue(TVIdentity("table"), Fact{ID: TVIdentity(testChesses[3].ID), Value: NewTVStruct(testChesses[3])}),
 				))
 			})
 		})
 	})
-
 })
+
+func collect[T any](fn func(func(item T) (stop bool))) []T {
+	ret := make([]T, 0, 4)
+	fn(func(item T) bool {
+		ret = append(ret, item)
+		return false
+	})
+	return ret
+}
+
+func ignoreIndex[T any](fn func(T)) func(T, int) {
+	return func(t T, _ int) {
+		fn(t)
+	}
+}

@@ -1,0 +1,2 @@
+(defrule "test_rule" 
+ (de))
