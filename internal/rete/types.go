@@ -1,9 +1,9 @@
 package rete
 
 import (
-	"fmt"
 	"reflect"
 
+	"github.com/dolthub/maphash"
 	"github.com/pkg/errors"
 )
 
@@ -41,18 +41,18 @@ var testValueTypeDict = [...]string{
 	"Unknown", "Nil", "ID", "Int", "Uint", "Float", "String",
 }
 
+var testValueTypeRTypeDict = [...]reflect.Type{
+	nil, reflect.TypeOf(&TVNil{}), reflect.TypeOf(TVIdentity("")), reflect.TypeOf(TVInt(0)),
+	reflect.TypeOf(TVUint(0)), reflect.TypeOf(TVFloat(0)),
+	reflect.TypeOf(TVString("")),
+}
+
 func (t TestValueType) String() string {
 	if int(t) >= len(testValueTypeDict) {
 		return testValueTypeDict[0]
 	}
 
 	return testValueTypeDict[t]
-}
-
-var testValueTypeRTypeDict = [...]reflect.Type{
-	nil, reflect.TypeOf(&TVNil{}), reflect.TypeOf(TVIdentity("")), reflect.TypeOf(TVInt(0)),
-	reflect.TypeOf(TVUint(0)), reflect.TypeOf(TVFloat(0)),
-	reflect.TypeOf(TVString("")),
 }
 
 var rType2testValueType = map[reflect.Type]TestValueType{
@@ -75,9 +75,11 @@ func (t TestValueType) RType() reflect.Type {
 
 type TVIdentity string
 
+var tvIdentityHasher = maphash.NewHasher[TVIdentity]()
+
 func (TVIdentity) testValue()            {}
 func (TVIdentity) Type() TestValueType   { return TestValueTypeIdentity }
-func (v TVIdentity) Hash() uint64        { return hashAny(v) }
+func (v TVIdentity) Hash() uint64        { return tvIdentityHasher.Hash(v) }
 func (v TVIdentity) RType() reflect.Type { return reflect.TypeOf("") }
 func (v TVIdentity) GetField(f string) (TestValue, error) {
 	if f != FieldSelf {
@@ -91,9 +93,11 @@ func (v TVIdentity) Equal(w TestValue) bool {
 
 type TVString string
 
+var tvStringHasher = maphash.NewHasher[TVString]()
+
 func (TVString) testValue()            {}
 func (TVString) Type() TestValueType   { return TestValueTypeString }
-func (v TVString) Hash() uint64        { return hashAny(v) }
+func (v TVString) Hash() uint64        { return tvStringHasher.Hash(v) }
 func (v TVString) RType() reflect.Type { return reflect.TypeOf("") }
 func (v TVString) Equal(w TestValue) bool {
 	return w != nil && w.Type() == TestValueTypeString && v == w.(TVString)
@@ -107,9 +111,11 @@ func (v TVString) GetField(f string) (TestValue, error) {
 
 type TVInt int64
 
+var tvIntHasher = maphash.NewHasher[TVInt]()
+
 func (TVInt) testValue()            {}
 func (TVInt) Type() TestValueType   { return TestValueTypeInt }
-func (v TVInt) Hash() uint64        { return hashAny(v) }
+func (v TVInt) Hash() uint64        { return tvIntHasher.Hash(v) }
 func (v TVInt) toFloat() TVFloat    { return TVFloat(v) }
 func (v TVInt) RType() reflect.Type { return reflect.TypeOf(int64(0)) }
 func (v TVInt) Equal(w TestValue) bool {
@@ -124,9 +130,11 @@ func (v TVInt) GetField(f string) (TestValue, error) {
 
 type TVUint uint64
 
+var tvUintHasher = maphash.NewHasher[TVUint]()
+
 func (TVUint) testValue()            {}
 func (TVUint) Type() TestValueType   { return TestValueTypeUint }
-func (v TVUint) Hash() uint64        { return hashAny(v) }
+func (v TVUint) Hash() uint64        { return tvUintHasher.Hash(v) }
 func (v TVUint) toFloat() TVFloat    { return TVFloat(v) }
 func (v TVUint) RType() reflect.Type { return reflect.TypeOf(uint64(0)) }
 func (v TVUint) Equal(w TestValue) bool {
@@ -141,9 +149,11 @@ func (v TVUint) GetField(f string) (TestValue, error) {
 
 type TVFloat float64
 
+var tvFloatHasher = maphash.NewHasher[TVFloat]()
+
 func (TVFloat) testValue()            {}
 func (TVFloat) Type() TestValueType   { return TestValueTypeFloat }
-func (v TVFloat) Hash() uint64        { return hashAny(v) }
+func (v TVFloat) Hash() uint64        { return tvFloatHasher.Hash(v) }
 func (v TVFloat) toFloat() TVFloat    { return TVFloat(v) }
 func (v TVFloat) RType() reflect.Type { return reflect.TypeOf(float64(0)) }
 func (v TVFloat) Equal(w TestValue) bool {
@@ -163,9 +173,11 @@ func NewTVNil() *TVNil {
 	return &TVNil{}
 }
 
+var tvNilHash = maphash.NewHasher[TVNil]().Hash(TVNil{})
+
 func (*TVNil) testValue()               {}
 func (*TVNil) Type() TestValueType      { return TestValueTypeNil }
-func (v *TVNil) Hash() uint64           { return hashAny(v) }
+func (v *TVNil) Hash() uint64           { return tvNilHash }
 func (v *TVNil) RType() reflect.Type    { return reflect.TypeOf(&TVNil{}) }
 func (v *TVNil) Equal(w TestValue) bool { return w.Type() == TestValueTypeNil }
 func (v *TVNil) GetField(f string) (TestValue, error) {
@@ -190,14 +202,16 @@ func NewTVStruct(v any) *TVStruct {
 	return &TVStruct{v: v}
 }
 
-func (*TVStruct) testValue()           {}
-func (*TVStruct) Type() TestValueType  { return TestValueTypeStruct }
-func (v *TVStruct) Hash() uint64       { return mix64(hashAny(v), hashAny(v.v)) }
+var tvStructHasher = maphash.NewHasher[TVStruct]()
+
+func (TVStruct) testValue()            {}
+func (TVStruct) Type() TestValueType   { return TestValueTypeStruct }
+func (v TVStruct) Hash() uint64        { return tvStructHasher.Hash(v) }
 func (v TVStruct) RType() reflect.Type { return reflect.TypeOf(v) }
 
-func (v *TVStruct) Value() any { return v.v }
+func (v TVStruct) Value() any { return v.v }
 
-func (v *TVStruct) GetField(f string) (TestValue, error) {
+func (v TVStruct) GetField(f string) (TestValue, error) {
 	rv := reflect.Indirect(reflect.ValueOf(v.v))
 	if !rv.IsValid() {
 		return nil, errors.New("nil value in TVStruct")
@@ -233,7 +247,7 @@ func (v *TVStruct) GetField(f string) (TestValue, error) {
 	}
 }
 
-func (v *TVStruct) HasField(f string) bool {
+func (v TVStruct) HasField(f string) bool {
 	vt := reflect.TypeOf(v.v)
 	if vt.Kind() == reflect.Ptr {
 		vt = vt.Elem()
@@ -243,56 +257,7 @@ func (v *TVStruct) HasField(f string) bool {
 	return in
 }
 
-func (v *TVStruct) Equal(w TestValue) bool {
+func (v TVStruct) Equal(w TestValue) bool {
 	return w != nil && w.Type() == TestValueTypeStruct &&
 		v.v == w.(*TVStruct).v
-}
-
-type TestOp int
-
-type TestFunc func(condValue, wmeValue TestValue) bool
-
-var testOp2Func = [NTestOp]TestFunc{
-	TestOpEqual: TestEqual,
-	TestOpLess:  TestLess,
-}
-
-func (t TestOp) ToFunc() TestFunc {
-	return testOp2Func[t]
-}
-
-// TestFunc
-func TestEqual(x, y TestValue) bool {
-	// TODO: check types of x and y
-	return x.Equal(y)
-}
-
-func TestLess(l, r TestValue) bool {
-	if l.Type() != r.Type() {
-		if x, ok := conv2Float(l); ok {
-			if y, ok := conv2Float(r); ok {
-				return x < y
-			}
-		}
-		panic("cannot compare value with different type")
-	}
-	switch l.Type() {
-	case TestValueTypeInt:
-		return l.(TVInt) < r.(TVInt)
-	case TestValueTypeUint:
-		return l.(TVUint) < r.(TVUint)
-	case TestValueTypeFloat:
-		return l.(TVFloat) < r.(TVFloat)
-	}
-	panic(fmt.Sprintf("less operator is unsupported for type %s", l.Type()))
-}
-
-func conv2Float(v TestValue) (TVFloat, bool) {
-	f, ok := v.(interface {
-		toFloat() TVFloat
-	})
-	if !ok {
-		return 0, false
-	}
-	return f.toFloat(), ok
 }

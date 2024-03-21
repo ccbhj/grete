@@ -50,21 +50,48 @@ var _ = Describe("AlphaNet", func() {
 		Expect(an).NotTo(BeNil())
 	})
 
-	Context("fact hashing", func() {
+	Describe("fact hashing", func() {
 		It("hash by id and value", func() {
 			Expect(Fact{ID: "X", Value: TVString("FOO")}.Hash()).
-				Should(BeEquivalentTo(Fact{ID: "X", Value: TVString("FOO")}.Hash()))
+				Should(BeEquivalentTo(firstArg(Fact{ID: "X", Value: TVString("FOO")}.Hash())))
 			Expect(Fact{ID: "X", Value: TVString("FOO")}.Hash()).
-				ShouldNot(BeEquivalentTo(Fact{ID: "Y", Value: TVString("FOO")}.Hash()))
+				ShouldNot(BeEquivalentTo(firstArg(Fact{ID: "Y", Value: TVString("FOO")}.Hash())))
 			Expect(Fact{ID: "X", Value: TVString("FOO")}.Hash()).
-				ShouldNot(BeEquivalentTo(Fact{ID: "X", Value: TVInt(1)}.Hash()))
+				ShouldNot(BeEquivalentTo(firstArg(Fact{ID: "X", Value: TVInt(1)}.Hash())))
 
 			Expect(Fact{ID: "X", Value: NewTVStruct(struct{ Foo string }{"FOO"})}.Hash()).
-				Should(BeEquivalentTo(Fact{ID: "X", Value: NewTVStruct(struct{ Foo string }{"FOO"})}.Hash()))
+				Should(BeEquivalentTo(firstArg(Fact{ID: "X", Value: NewTVStruct(struct{ Foo string }{"FOO"})}.Hash())))
 			Expect(Fact{ID: "X", Value: NewTVStruct(struct{ Foo string }{"FOO"})}.Hash()).
-				ShouldNot(BeEquivalentTo(Fact{ID: "X", Value: NewTVStruct(struct{ Foo string }{"BAR"})}.Hash()))
+				ShouldNot(BeEquivalentTo(firstArg(Fact{ID: "X", Value: NewTVStruct(struct{ Foo string }{"BAR"})}.Hash())))
+			// compare struct
 			Expect(Fact{ID: "X", Value: NewTVStruct(struct{ Foo string }{"FOO"})}.Hash()).
-				ShouldNot(BeEquivalentTo(Fact{ID: "X", Value: NewTVStruct(struct{ Bar string }{"FOO"})}.Hash()))
+				Should(BeEquivalentTo(firstArg(Fact{ID: "X", Value: NewTVStruct(struct{ Bar string }{"FOO"})}.Hash())))
+
+			// compare pointer
+			Expect(Fact{ID: "X", Value: NewTVStruct(&struct{ Foo string }{"FOO"})}.Hash()).
+				ShouldNot(BeEquivalentTo(firstArg(Fact{ID: "X", Value: NewTVStruct(&struct{ Bar string }{"FOO"})}.Hash())))
+		})
+	})
+
+	Describe("dummy alpha memory", func() {
+		It("can share one dummy memory", func() {
+			dm0 := an.makeDummyAlphaMem()
+			dm1 := an.makeDummyAlphaMem()
+			Expect(dm0).Should(BeIdenticalTo(dm1))
+		})
+
+		It("should pass test for every WME", func() {
+			dm := an.makeDummyAlphaMem()
+			an.AddFact(Fact{
+				ID:    "X",
+				Value: TVString("foo"),
+			})
+			an.AddFact(Fact{
+				ID:    "Y",
+				Value: NewTVNil(),
+			})
+
+			Expect(dm.NItems()).To(BeEquivalentTo(2))
 		})
 	})
 
@@ -147,7 +174,6 @@ var _ = Describe("AlphaNet", func() {
 				Expect(n.PerformTest(&WME{ID: "X", Value: NewTVStruct(struct{ On string }{"Y"})})).Should(BeTrue())
 			})
 		})
-
 	})
 
 	Describe("constructing AlphaNetwork", func() {
@@ -183,13 +209,15 @@ var _ = Describe("AlphaNet", func() {
 		When("testing condition with value of Identity type", func() {
 			var child AlphaNode
 			var am *AlphaMem
+			var cond Cond
 			BeforeEach(func() {
-				am = an.MakeAlphaMem(Cond{
+				cond = Cond{
 					Alias:     TVIdentity("x"),
 					AliasAttr: "On",
 					Value:     TVIdentity("y"),
 					TestOp:    TestOpEqual,
-				})
+				}
+				am = an.MakeAlphaMem(cond)
 				an.AlphaRoot().ForEachChild(func(tn AlphaNode) (stop bool) {
 					child = tn
 					return true
@@ -202,9 +230,31 @@ var _ = Describe("AlphaNet", func() {
 				Expect(child.PerformTest(NewWME("X", NewTVStruct(struct{ Color TVString }{""})))).To(BeFalse())
 				Expect(child.PerformTest(NewWME("X", NewTVStruct(struct{ On TVString }{""})))).To(BeTrue())
 			})
+
+			It("can be shared by other node if if Alias are the same", func() {
+				otherAM := an.MakeAlphaMem(Cond{
+					Alias:     cond.Alias,
+					AliasAttr: "Color",
+					Value:     TVString("red"),
+					TestOp:    TestOpEqual,
+				})
+				Expect(otherAM.inputAlphaNode.Parent()).Should(BeIdenticalTo(am.inputAlphaNode))
+				inputNode := am.inputAlphaNode
+				Expect(inputNode.(*TypeTestNode).FieldConstraints).
+					Should(And(HaveKey("Color"), HaveKey("On")))
+
+				otherAM = an.MakeAlphaMem(Cond{
+					// try different alias
+					Alias:     cond.Alias + cond.Alias,
+					AliasAttr: "Color",
+					Value:     NewTVNil(),
+					TestOp:    TestOpEqual,
+				})
+				Expect(otherAM.inputAlphaNode.Parent()).ShouldNot(BeIdenticalTo(am.inputAlphaNode))
+			})
 		})
 
-		Context("testing condition with value of non-Identity type as tested Value", func() {
+		When("testing condition with value of non-Identity type as tested Value", func() {
 			var child, grandChild AlphaNode
 			var am *AlphaMem
 			BeforeEach(func() {
@@ -245,7 +295,7 @@ var _ = Describe("AlphaNet", func() {
 				Expect(grandChild.OutputMem()).To(Equal(am))
 			})
 
-			It("should test the Attr or the Type of WME with TypeTestNode  ", func() {
+			It("should test the Attr or the Type of WME with TypeTestNode", func() {
 				// Type not matched
 				Expect(child.PerformTest(NewWME("X", TVString("!!!")))).To(BeFalse())
 				// Attr not found
@@ -257,7 +307,98 @@ var _ = Describe("AlphaNet", func() {
 				Expect(grandChild.PerformTest(NewWME("X", NewTVStruct(struct{ Color TVString }{"blue"})))).To(BeFalse())
 				Expect(grandChild.PerformTest(NewWME("X", NewTVStruct(struct{ Color TVString }{"red"})))).To(BeTrue())
 			})
+		})
 
+		When("building negative constant cond", func() {
+			var (
+				child, grandChild, grandGrandChild AlphaNode
+				am                                 *AlphaMem
+				c                                  Cond
+			)
+			BeforeEach(func() {
+				c = Cond{
+					Alias:     "X",
+					AliasAttr: "Color",
+					Value:     TVString("red"),
+					Negative:  true,
+					TestOp:    TestOpEqual,
+				}
+				am = an.MakeAlphaMem(c)
+				grandGrandChild = am.inputAlphaNode
+				grandChild = grandGrandChild.Parent()
+				child = grandChild.Parent()
+			})
+
+			It("should be a tree with depth to be 3", func() {
+				Expect(grandGrandChild).To(BeAssignableToTypeOf(&NegativeTestNode{}))
+				Expect(grandChild).To(BeAssignableToTypeOf(&ConstantTestNode{}))
+				Expect(child).To(BeAssignableToTypeOf(&TypeTestNode{}))
+				Expect(child.Parent()).To(BeIdenticalTo(an.root))
+			})
+
+			It("can share node with its positive node", func() {
+				pCond := c
+				pCond.Negative = false
+				pAm := an.MakeAlphaMem(pCond)
+				Expect(pAm.inputAlphaNode).To(BeIdenticalTo(grandChild))
+				Expect(pAm.inputAlphaNode.Parent()).To(BeIdenticalTo(child))
+			})
+		})
+	})
+
+	Describe("destructing alpha mem", func() {
+		var (
+			am *AlphaMem
+		)
+		BeforeEach(func() {
+			am = an.MakeAlphaMem(Cond{
+				Alias:     "X",
+				AliasAttr: "Color",
+				Value:     TVString("red"),
+				TestOp:    TestOpEqual,
+			})
+		})
+
+		It("can destruct a stand-alone alpha mem", func() {
+			inputNode := am.inputAlphaNode
+			parent := inputNode.Parent()
+			grandParent := inputNode.Parent().Parent()
+
+			an.DestoryAlphaMem(am)
+			Expect(am.an).Should(BeNil())
+			Expect(am.inputAlphaNode).Should(BeNil())
+			Expect(parent.IsParentOf(inputNode)).Should(BeFalse())
+			Expect(grandParent.IsParentOf(parent)).Should(BeFalse())
+		})
+
+		It("however won't destruct a share construct node", func() {
+			newAM := an.MakeAlphaMem(Cond{
+				Alias:     "X", // alias must be the same to share the type check node
+				AliasAttr: "Color",
+				Value:     TVString("blue"),
+				TestOp:    TestOpEqual,
+			})
+			inputNode := am.inputAlphaNode
+			parent := inputNode.Parent()
+			grandParent := inputNode.Parent().Parent()
+
+			newInputNode := newAM.inputAlphaNode
+			newParent := newInputNode.Parent()
+			newGrandParent := newInputNode.Parent().Parent()
+			Expect(newParent).Should(BeIdenticalTo(parent))
+			Expect(newGrandParent).Should(BeIdenticalTo(grandParent))
+
+			an.DestoryAlphaMem(am)
+			Expect(am.an).Should(BeNil())
+			Expect(am.inputAlphaNode).Should(BeNil())
+			// old am parent's had been already cleaned
+			Expect(parent.IsParentOf(inputNode)).Should(BeFalse())
+
+			Expect(newInputNode.Parent()).Should(BeIdenticalTo(newParent))
+			Expect(newParent.Parent()).Should(BeIdenticalTo(newGrandParent))
+			Expect(newParent.IsParentOf(newInputNode)).Should(BeTrue())
+			Expect(newGrandParent.IsParentOf(newParent)).Should(BeTrue())
+			Expect(grandParent.IsParentOf(parent)).Should(BeTrue())
 		})
 	})
 
@@ -277,6 +418,13 @@ var _ = Describe("AlphaNet", func() {
 					AliasAttr: "Color",
 					Value:     TVString("red"),
 					TestOp:    TestOpEqual,
+				},
+				{
+					Alias:     TVIdentity("x"),
+					AliasAttr: "Color",
+					Value:     TVString(""),
+					TestOp:    TestOpEqual,
+					Negative:  true,
 				},
 			}
 		)
@@ -300,7 +448,6 @@ var _ = Describe("AlphaNet", func() {
 		})
 
 		When("performing type checking", func() {
-
 			It("any item in testFacts has the matched type", func() {
 				typeAM := ams[0]
 				Expect(typeAM.NItems()).To(BeEquivalentTo(len(testFacts)))
@@ -353,6 +500,27 @@ var _ = Describe("AlphaNet", func() {
 			am.ForEachItem(func(w *WME) (stop bool) {
 				Expect(redFacts).To(ContainElement(w.Value.(*TVStruct).Value()))
 				return false
+			})
+		})
+
+		When("performing negative testing", func() {
+			var negativeAM *AlphaMem
+			var positiveAM *AlphaMem
+
+			BeforeEach(func() {
+				negativeAM = ams[2]
+
+				pc := conds[2]
+				pc.Negative = false
+				positiveAM = an.MakeAlphaMem(pc)
+				lo.ForEach(testFacts, func(item *Chess, _ int) {
+					an.AddFact(Fact{ID: TVIdentity(item.ID), Value: NewTVStruct(item)})
+				})
+			})
+
+			It("can match wmes", func() {
+				Expect(negativeAM.NItems()).To(Equal(3))
+				Expect(positiveAM.NItems()).To(Equal(1))
 			})
 		})
 	})
@@ -424,3 +592,7 @@ var _ = Describe("AlphaNet", func() {
 		})
 	})
 })
+
+func firstArg(vals ...any) any {
+	return vals[0]
+}

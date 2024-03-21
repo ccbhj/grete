@@ -1,6 +1,8 @@
 package rete
 
 import (
+	"fmt"
+
 	"github.com/pkg/errors"
 )
 
@@ -14,13 +16,6 @@ type (
 
 		AliasType *TypeInfo
 	}
-)
-
-// TestOp
-const (
-	TestOpEqual TestOp = iota
-	TestOpLess
-	NTestOp
 )
 
 /*
@@ -55,6 +50,7 @@ func (c Cond) Hash(opt uint64) uint64 {
 	} else if opt&CondHashOptMaskValue != 0 {
 		x = mix64(c.Alias.Hash(), c.AliasAttr.Hash())
 	}
+	x = uint64(mix32(uint32(x), uint32(x>>32)))
 	ret := ((uint64(c.TestOp) << condTestOpTypeOffset) & condTestOpTypeMask) | x
 	if c.Negative {
 		return ret | condTestNegativeFlag
@@ -93,4 +89,65 @@ func (f Fact) HasField(field string) bool {
 		panic(errors.Errorf("cannot get field %s from %s", field, f.Value.Type()))
 	}
 	return f.Value.(*TVStruct).HasField(field)
+}
+
+type TestOp int
+
+type TestFunc func(condValue, wmeValue TestValue) bool
+
+// TestOp
+const (
+	testOpAlwaysTrue TestOp = iota
+	testOpAlwaysFalse
+	TestOpEqual
+	TestOpLess
+
+	NTestOp
+)
+
+var testOp2Func = [NTestOp]TestFunc{
+	TestOpEqual:       TestEqual,
+	TestOpLess:        TestLess,
+	testOpAlwaysFalse: func(condValue, wmeValue TestValue) bool { return false },
+	testOpAlwaysTrue:  func(condValue, wmeValue TestValue) bool { return true },
+}
+
+func (t TestOp) ToFunc() TestFunc {
+	return testOp2Func[t]
+}
+
+// TestFunc
+func TestEqual(x, y TestValue) bool {
+	// TODO: check types of x and y
+	return x.Equal(y)
+}
+
+func TestLess(l, r TestValue) bool {
+	if l.Type() != r.Type() {
+		if x, ok := conv2Float(l); ok {
+			if y, ok := conv2Float(r); ok {
+				return x < y
+			}
+		}
+		panic("cannot compare value with different type")
+	}
+	switch l.Type() {
+	case TestValueTypeInt:
+		return l.(TVInt) < r.(TVInt)
+	case TestValueTypeUint:
+		return l.(TVUint) < r.(TVUint)
+	case TestValueTypeFloat:
+		return l.(TVFloat) < r.(TVFloat)
+	}
+	panic(fmt.Sprintf("less operator is unsupported for type %s", l.Type()))
+}
+
+func conv2Float(v TestValue) (TVFloat, bool) {
+	f, ok := v.(interface {
+		toFloat() TVFloat
+	})
+	if !ok {
+		return 0, false
+	}
+	return f.toFloat(), ok
 }

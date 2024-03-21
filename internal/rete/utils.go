@@ -6,6 +6,7 @@ import (
 	"math/bits"
 
 	H "github.com/mitchellh/hashstructure/v2"
+	"github.com/pkg/errors"
 	"github.com/zyedidia/generic/list"
 )
 
@@ -89,7 +90,7 @@ func isIdentity(tv TestValue) bool {
 func hashAny(v any) uint64 {
 	h, err := H.Hash(v, H.FormatV2, &H.HashOptions{})
 	if err != nil {
-		panic(err)
+		panic(errors.Errorf("fail to hash %+v: %s", v, err))
 	}
 	return h
 }
@@ -116,4 +117,17 @@ func mix32(x, y uint32) uint32 {
 func mix64(x, y uint64) uint64 {
 	hi, lo := bits.Mul64(x, y)
 	return hi ^ lo
+}
+
+func typeOf[T any](v any) bool {
+	_, ok := v.(T)
+	return ok
+}
+
+func Curry2[T, V any](fn func(T, V)) func(T) func(V) {
+	return func(t T) func(V) {
+		return func(v V) {
+			fn(t, v)
+		}
+	}
 }
