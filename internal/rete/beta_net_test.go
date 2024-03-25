@@ -74,12 +74,14 @@ var _ = Describe("JoinTest", func() {
 					LhsAttr:    FieldID,
 					RhsAttr:    FieldID,
 					CondOffRhs: 0,
+					TestOp:     TestOpEqual,
 				}))
 				Expect(jts[0].performTest(toWME(chessTab), toWME(chessTab))).Should(BeTrue())
 				Expect(jts[1]).To(Equal(&TestAtJoinNode{
 					LhsAttr:    FieldID,
 					RhsAttr:    FieldID,
 					CondOffRhs: 1,
+					TestOp:     TestOpEqual,
 				}))
 				Expect(jts[1].performTest(toWME(chessTab), toWME(chessTab))).Should(BeTrue())
 			}
@@ -133,7 +135,6 @@ var _ = Describe("JoinTest", func() {
 				Expect(jt.performTest(toWME(chessX), toWME(chessTab))).To(BeTrue())
 			}
 		})
-
 	})
 })
 
@@ -150,14 +151,14 @@ var _ = Describe("BetaNet", func() {
 		Expect(bn).NotTo(BeNil())
 	})
 
-	AfterEach(func() {
-		an = NewAlphaNetwork()
-		Expect(an).NotTo(BeNil())
-		bn = NewBetaNetwork(an)
-		Expect(bn).NotTo(BeNil())
-	})
-
 	Describe("construction", func() {
+		AfterEach(func() {
+			an = NewAlphaNetwork()
+			Expect(an).NotTo(BeNil())
+			bn = NewBetaNetwork(an)
+			Expect(bn).NotTo(BeNil())
+		})
+
 		When("adding production", func() {
 			It("can add an single production", func() {
 				pNode := bn.AddProduction("test", Cond{
@@ -312,6 +313,13 @@ var _ = Describe("BetaNet", func() {
 				})
 			})
 
+			AfterEach(func() {
+				an = NewAlphaNetwork()
+				Expect(an).NotTo(BeNil())
+				bn = NewBetaNetwork(an)
+				Expect(bn).NotTo(BeNil())
+			})
+
 			It("can remove a single rule", func() {
 				const ruleName = "single_rule"
 				singleRule := bn.AddProduction(ruleName, Cond{
@@ -399,15 +407,84 @@ var _ = Describe("BetaNet", func() {
 				lo.ForEach(testChessFacts, ignoreIndex(bn.AddFact))
 				Expect(multiRule.Matches()).ShouldNot(BeEmpty())
 			})
+
+			When("removing negative production", func() {
+				It("can remove a single rule negative production", func() {
+					const singleNegativeRule = "single_negative"
+					singleRule := bn.AddProduction(singleNegativeRule, Cond{
+						Alias:     "X",
+						AliasAttr: "Color",
+						Value:     TVString("red"),
+						Negative:  true,
+					})
+					lo.ForEach(testChessFacts, ignoreIndex(bn.AddFact))
+					Expect(singleRule.AnyMatches()).To(BeTrue())
+					matches, err := singleRule.Matches()
+					Expect(err).To(BeNil())
+					Expect(matches).To(HaveLen(len(testChesses) - len(redChesses)))
+
+					err = bn.RemoveProduction(singleNegativeRule)
+					Expect(err).To(BeNil())
+					Expect(singleRule.AnyMatches()).To(BeFalse())
+					Expect(singleRule.Parent()).To(BeNil())
+				})
+
+				It("can remove a multi rule negative production", func() {
+					const multiNegativeRule = "multi_negative"
+					chesses := getTestFacts()
+					multiRules := bn.AddProduction(multiNegativeRule,
+						Cond{
+							Alias:     "X",
+							AliasAttr: FieldSelf,
+							Value:     NewTVStruct(chesses[0]),
+						},
+						Cond{
+							Alias:     "X",
+							AliasAttr: "Color",
+							Value:     TVIdentity("c1"),
+						},
+						Cond{
+							Alias:     "Y",
+							AliasAttr: "Color",
+							Value:     TVIdentity("c2"),
+						},
+						Cond{
+							Alias:     "c1",
+							AliasAttr: FieldID,
+							Value:     TVIdentity("c2"),
+							Negative:  true,
+						},
+					)
+
+					lo.ForEach(
+						lo.Map(chesses[:3], func(c *Chess, i int) Fact {
+							return Fact{ID: c.ID, Value: NewTVStruct(c)}
+						}),
+						ignoreIndex(bn.AddFact))
+					Expect(multiRules.AnyMatches()).To(BeTrue())
+					matches, err := multiRules.Matches()
+					Expect(err).To(BeNil())
+					Expect(matches).To(HaveLen(3))
+
+					err = bn.RemoveProduction(multiNegativeRule)
+					Expect(err).To(BeNil())
+					Expect(multiRules.AnyMatches()).To(BeFalse())
+					Expect(multiRules.Parent()).To(BeNil())
+					Expect(multiRules.items.Len()).To(BeZero())
+				})
+
+			})
 		})
 	})
 
 	When("adding/removing facts", func() {
 		var (
-			singleRule   *PNode
-			multiRule    *PNode
-			testChesses  []*Chess
-			getTestChess = func() []*Chess {
+			singleRule         *PNode
+			multiRule          *PNode
+			testChesses        []*Chess
+			signleNegativeRule *PNode
+			multiNegativeRule  *PNode
+			getTestChess       = func() []*Chess {
 				var chess [4]*Chess
 				for i := 0; i < len(chess); i++ {
 					chess[i] = new(Chess)
@@ -422,7 +499,7 @@ var _ = Describe("BetaNet", func() {
 					ID:     "B2",
 					Color:  "blue",
 					LeftOf: chess[2],
-					On:     chess[3],
+					On:     chess[2],
 				}
 				*chess[2] = Chess{
 					ID:    "B3",
@@ -435,6 +512,7 @@ var _ = Describe("BetaNet", func() {
 				return chess[:]
 			}
 		)
+
 		BeforeEach(func() {
 			testChesses = getTestChess()
 			singleRule = bn.AddProduction("single_rule", Cond{
@@ -442,6 +520,13 @@ var _ = Describe("BetaNet", func() {
 				AliasAttr: "Color",
 				Value:     TVString("red"),
 				TestOp:    TestOpEqual,
+			})
+			signleNegativeRule = bn.AddProduction("single_negative_rule", Cond{
+				Alias:     "x",
+				AliasAttr: "Color",
+				Value:     TVString("red"),
+				TestOp:    TestOpEqual,
+				Negative:  true,
 			})
 
 			multiRule = bn.AddProduction("multi_rule",
@@ -476,6 +561,33 @@ var _ = Describe("BetaNet", func() {
 					TestOp:    TestOpEqual,
 				},
 			)
+			multiNegativeRule = bn.AddProduction("multi_negative_rule",
+				Cond{
+					Alias:     "x",
+					AliasAttr: "On",
+					Value:     TVIdentity("y"),
+					TestOp:    TestOpEqual,
+				},
+				Cond{
+					Alias:     "TABLE",
+					AliasAttr: "Color",
+					Value:     TVString(""),
+					TestOp:    TestOpEqual,
+				},
+				Cond{
+					Alias:     "x",
+					AliasAttr: "Color",
+					Value:     TVString(""),
+					TestOp:    TestOpEqual,
+					Negative:  true,
+				},
+				Cond{
+					Alias:     "y",
+					AliasAttr: FieldSelf,
+					Value:     TVIdentity("TABLE"),
+					TestOp:    TestOpEqual,
+					Negative:  true,
+				})
 
 			lo.ForEach(testChesses, func(c *Chess, _ int) {
 				bn.AddFact(Fact{
@@ -485,47 +597,50 @@ var _ = Describe("BetaNet", func() {
 			})
 		})
 
+		AfterEach(func() {
+			an = NewAlphaNetwork()
+			Expect(an).NotTo(BeNil())
+			bn = NewBetaNetwork(an)
+			Expect(bn).NotTo(BeNil())
+		})
+
 		Context("matching facts with single rule", func() {
 			var (
-				redFact []*Chess
-				matches []map[TVIdentity]Fact
+				redChess []*Chess
+				matches  []map[TVIdentity]any
+				err      error
 			)
 			BeforeEach(func() {
-				redFact = lo.Filter(testChesses, func(f *Chess, idx int) bool {
+				redChess = lo.Filter(testChesses, func(f *Chess, idx int) bool {
 					return f.Color == "red"
 				})
-				matches = singleRule.Matches()
+				matches, err = singleRule.Matches()
+				Expect(err).To(BeNil())
 			})
 
 			It("should match some facts", func() {
-				Expect(matches).Should(HaveLen(len(redFact)))
-				for _, fact := range redFact {
-					Expect(matches).To(ContainElement(map[TVIdentity]Fact{
-						"x": {
-							ID:    TVIdentity(fact.ID),
-							Value: NewTVStruct(fact),
-						},
+				Expect(matches).Should(HaveLen(len(redChess)))
+				for _, fact := range redChess {
+					Expect(matches).To(ContainElement(map[TVIdentity]any{
+						"x": fact,
 					}))
 				}
 			})
 
 			It("should still match some facts after removing one", func() {
 				bn.RemoveFact(Fact{
-					ID:    TVIdentity(redFact[0].ID),
-					Value: NewTVStruct(redFact[0]),
+					ID:    TVIdentity(redChess[0].ID),
+					Value: NewTVStruct(redChess[0]),
 				})
-				for _, fact := range redFact[1:] {
-					Expect(matches).To(ContainElement(map[TVIdentity]Fact{
-						"x": {
-							ID:    TVIdentity(fact.ID),
-							Value: NewTVStruct(fact),
-						},
+				for _, chess := range redChess[:] {
+					Expect(matches).To(ContainElement(map[TVIdentity]any{
+						"x": chess,
 					}))
 				}
 			})
 
 			It("should not match any facts after removing all", func() {
-				for _, fact := range redFact {
+				for _, fact := range redChess {
 					bn.RemoveFact(Fact{
 						ID:    TVIdentity(fact.ID),
 						Value: NewTVStruct(fact),
@@ -538,13 +653,14 @@ var _ = Describe("BetaNet", func() {
 		Context("can match facts with multi rules", func() {
 			It("should match some facts", func() {
 				Expect(multiRule.AnyMatches()).To(BeTrue())
-				matches := multiRule.Matches()
+				matches, err := multiRule.Matches()
+				Expect(err).To(BeNil())
 				Expect(matches).To(HaveLen(1))
 				Expect(matches[0]).Should(And(
-					HaveKeyWithValue(TVIdentity("x"), Fact{ID: TVIdentity(testChesses[0].ID), Value: NewTVStruct(testChesses[0])}),
-					HaveKeyWithValue(TVIdentity("y"), Fact{ID: TVIdentity(testChesses[1].ID), Value: NewTVStruct(testChesses[1])}),
-					HaveKeyWithValue(TVIdentity("z"), Fact{ID: TVIdentity(testChesses[2].ID), Value: NewTVStruct(testChesses[2])}),
-					HaveKeyWithValue(TVIdentity("table"), Fact{ID: TVIdentity(testChesses[3].ID), Value: NewTVStruct(testChesses[3])}),
+					HaveKeyWithValue(TVIdentity("x"), testChesses[0]),
+					HaveKeyWithValue(TVIdentity("y"), testChesses[1]),
+					HaveKeyWithValue(TVIdentity("z"), testChesses[2]),
+					HaveKeyWithValue(TVIdentity("table"), testChesses[3]),
 				))
 			})
 
@@ -555,14 +671,66 @@ var _ = Describe("BetaNet", func() {
 
 				bn.AddFact(f)
 				Expect(multiRule.AnyMatches()).Should(BeTrue())
-				matches := multiRule.Matches()
+				matches, err := multiRule.Matches()
+				Expect(err).To(BeNil())
 				Expect(matches).To(HaveLen(1))
 				Expect(matches[0]).Should(And(
-					HaveKeyWithValue(TVIdentity("x"), Fact{ID: TVIdentity(testChesses[0].ID), Value: NewTVStruct(testChesses[0])}),
-					HaveKeyWithValue(TVIdentity("y"), Fact{ID: TVIdentity(testChesses[1].ID), Value: NewTVStruct(testChesses[1])}),
-					HaveKeyWithValue(TVIdentity("z"), Fact{ID: TVIdentity(testChesses[2].ID), Value: NewTVStruct(testChesses[2])}),
-					HaveKeyWithValue(TVIdentity("table"), Fact{ID: TVIdentity(testChesses[3].ID), Value: NewTVStruct(testChesses[3])}),
+					HaveKeyWithValue(TVIdentity("x"), testChesses[0]),
+					HaveKeyWithValue(TVIdentity("y"), testChesses[1]),
+					HaveKeyWithValue(TVIdentity("z"), testChesses[2]),
+					HaveKeyWithValue(TVIdentity("table"), testChesses[3]),
 				))
+			})
+		})
+
+		Context("can match facts with negative rules", func() {
+			It("should match some facts for single rule", func() {
+				matches, err := signleNegativeRule.Matches()
+				Expect(err).To(BeNil())
+				nonRedChesses := lo.Filter(testChesses, func(item *Chess, index int) bool {
+					return item.Color != "red"
+				})
+				Expect(matches).Should(HaveLen(len(nonRedChesses)))
+				for _, chess := range nonRedChesses {
+					Expect(matches).To(ContainElement(map[TVIdentity]any{
+						"x": chess,
+					}))
+				}
+			})
+
+			It("should match some facts for multi rules", func() {
+				Expect(multiNegativeRule.AnyMatches()).To(BeTrue())
+				matches, err := multiNegativeRule.Matches()
+				Expect(err).To(BeNil())
+				for item := range multiNegativeRule.items {
+					GinkgoLogr.Info("match", item)
+				}
+				Expect(matches).To(HaveLen(2))
+				Expect(matches[0]).Should(Or(
+					And(
+						HaveKeyWithValue(TVIdentity("x"), testChesses[0]),
+						HaveKeyWithValue(TVIdentity("y"), testChesses[1]),
+						HaveKeyWithValue(TVIdentity("TABLE"), testChesses[3])),
+					And(
+						HaveKeyWithValue(TVIdentity("x"), testChesses[1]),
+						HaveKeyWithValue(TVIdentity("y"), testChesses[2]),
+						HaveKeyWithValue(TVIdentity("TABLE"), testChesses[3]),
+					)))
+				Expect(matches[1]).Should(Or(
+					And(
+						HaveKeyWithValue(TVIdentity("x"), testChesses[0]),
+						HaveKeyWithValue(TVIdentity("y"), testChesses[1]),
+						HaveKeyWithValue(TVIdentity("TABLE"), testChesses[3])),
+					And(
+						HaveKeyWithValue(TVIdentity("x"), testChesses[1]),
+						HaveKeyWithValue(TVIdentity("y"), testChesses[2]),
+						HaveKeyWithValue(TVIdentity("TABLE"), testChesses[3]),
+					)))
+
+				bn.RemoveFact(Fact{ID: testChesses[0].ID, Value: NewTVStruct(testChesses[0])})
+				Expect(multiNegativeRule.Matches()).To(HaveLen(1))
+				bn.AddFact(Fact{ID: testChesses[0].ID, Value: NewTVStruct(testChesses[0])})
+				Expect(multiNegativeRule.Matches()).To(HaveLen(2))
 			})
 		})
 	})

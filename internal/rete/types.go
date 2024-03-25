@@ -20,8 +20,9 @@ type (
 		Hash() uint64
 		Type() TestValueType
 		RType() reflect.Type
-		GetField(string) (TestValue, error)
+		GetField(string) (TestValue, any, error)
 		Equal(TestValue) bool
+		ToGoValue() any
 	}
 )
 
@@ -81,15 +82,16 @@ func (TVIdentity) testValue()            {}
 func (TVIdentity) Type() TestValueType   { return TestValueTypeIdentity }
 func (v TVIdentity) Hash() uint64        { return tvIdentityHasher.Hash(v) }
 func (v TVIdentity) RType() reflect.Type { return reflect.TypeOf("") }
-func (v TVIdentity) GetField(f string) (TestValue, error) {
+func (v TVIdentity) GetField(f string) (TestValue, any, error) {
 	if f != FieldSelf {
-		return nil, ErrFieldNotFound
+		return nil, nil, ErrFieldNotFound
 	}
-	return TVString(string(v)), nil
+	return TVIdentity(string(v)), string(v), nil
 }
 func (v TVIdentity) Equal(w TestValue) bool {
 	return w != nil && w.Type() == TestValueTypeIdentity && v == w.(TVIdentity)
 }
+func (v TVIdentity) ToGoValue() any { return string(v) }
 
 type TVString string
 
@@ -102,12 +104,13 @@ func (v TVString) RType() reflect.Type { return reflect.TypeOf("") }
 func (v TVString) Equal(w TestValue) bool {
 	return w != nil && w.Type() == TestValueTypeString && v == w.(TVString)
 }
-func (v TVString) GetField(f string) (TestValue, error) {
+func (v TVString) GetField(f string) (TestValue, any, error) {
 	if f != FieldSelf {
-		return nil, ErrFieldNotFound
+		return nil, nil, ErrFieldNotFound
 	}
-	return v, nil
+	return v, string(v), nil
 }
+func (v TVString) ToGoValue() any { return v }
 
 type TVInt int64
 
@@ -121,12 +124,13 @@ func (v TVInt) RType() reflect.Type { return reflect.TypeOf(int64(0)) }
 func (v TVInt) Equal(w TestValue) bool {
 	return w != nil && w.Type() == TestValueTypeInt && v == w.(TVInt)
 }
-func (v TVInt) GetField(f string) (TestValue, error) {
+func (v TVInt) GetField(f string) (TestValue, any, error) {
 	if f != FieldSelf {
-		return nil, ErrFieldNotFound
+		return nil, nil, ErrFieldNotFound
 	}
-	return v, nil
+	return v, int64(v), nil
 }
+func (v TVInt) ToGoValue() any { return int64(v) }
 
 type TVUint uint64
 
@@ -140,12 +144,13 @@ func (v TVUint) RType() reflect.Type { return reflect.TypeOf(uint64(0)) }
 func (v TVUint) Equal(w TestValue) bool {
 	return w != nil && w.Type() == TestValueTypeUint && v == w.(TVUint)
 }
-func (v TVUint) GetField(f string) (TestValue, error) {
+func (v TVUint) GetField(f string) (TestValue, any, error) {
 	if f != FieldSelf {
-		return nil, ErrFieldNotFound
+		return nil, nil, ErrFieldNotFound
 	}
-	return v, nil
+	return v, uint64(v), nil
 }
+func (v TVUint) ToGoValue() any { return uint64(v) }
 
 type TVFloat float64
 
@@ -159,12 +164,13 @@ func (v TVFloat) RType() reflect.Type { return reflect.TypeOf(float64(0)) }
 func (v TVFloat) Equal(w TestValue) bool {
 	return w != nil && w.Type() == TestValueTypeFloat && v == w.(TVFloat)
 }
-func (v TVFloat) GetField(f string) (TestValue, error) {
+func (v TVFloat) GetField(f string) (TestValue, any, error) {
 	if f != FieldSelf {
-		return nil, ErrFieldNotFound
+		return nil, nil, ErrFieldNotFound
 	}
-	return v, nil
+	return v, float64(v), nil
 }
+func (v TVFloat) ToGoValue() any { return float64(v) }
 
 type TVNil struct {
 }
@@ -180,12 +186,13 @@ func (*TVNil) Type() TestValueType      { return TestValueTypeNil }
 func (v *TVNil) Hash() uint64           { return tvNilHash }
 func (v *TVNil) RType() reflect.Type    { return reflect.TypeOf(&TVNil{}) }
 func (v *TVNil) Equal(w TestValue) bool { return w.Type() == TestValueTypeNil }
-func (v *TVNil) GetField(f string) (TestValue, error) {
+func (v *TVNil) GetField(f string) (TestValue, any, error) {
 	if f != FieldSelf {
-		return nil, ErrFieldNotFound
+		return nil, nil, ErrFieldNotFound
 	}
-	return v, nil
+	return v, nil, nil
 }
+func (v *TVNil) ToGoValue() any { return nil }
 
 // type info of an Alias
 type TypeInfo struct {
@@ -208,42 +215,45 @@ func (TVStruct) testValue()            {}
 func (TVStruct) Type() TestValueType   { return TestValueTypeStruct }
 func (v TVStruct) Hash() uint64        { return tvStructHasher.Hash(v) }
 func (v TVStruct) RType() reflect.Type { return reflect.TypeOf(v) }
+func (v TVStruct) Value() any          { return v.v }
+func (v TVStruct) ToGoValue() any      { return v.v }
 
-func (v TVStruct) Value() any { return v.v }
-
-func (v TVStruct) GetField(f string) (TestValue, error) {
+// GetField extract field value by field name `f`, wrap it into TestValue and return it
+func (v TVStruct) GetField(f string) (TestValue, any, error) {
 	rv := reflect.Indirect(reflect.ValueOf(v.v))
 	if !rv.IsValid() {
-		return nil, errors.New("nil value in TVStruct")
+		return nil, nil, errors.New("nil value in TVStruct")
 	}
 
 	fv := rv.FieldByName(f)
 	if !fv.IsValid() {
-		return nil, errors.WithMessagef(ErrFieldNotFound, "field=%s", f)
+		return nil, nil, errors.WithMessagef(ErrFieldNotFound, "field=%s", f)
 	}
 
 	if _, in := rType2testValueType[fv.Type()]; in {
-		return fv.Interface().(TestValue), nil
+		ret := fv.Interface()
+		return ret.(TestValue), ret, nil
 	}
 
 	isPtr := fv.Kind() == reflect.Pointer
 	if isPtr && fv.IsZero() {
-		return &TVNil{}, nil
+		return &TVNil{}, nil, nil
 	}
 
 	switch fv.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return TVInt(fv.Int()), nil
+		return TVInt(fv.Int()), fv.Interface(), nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return TVUint(fv.Uint()), nil
+		return TVUint(fv.Uint()), fv.Interface(), nil
 	case reflect.String:
-		return TVString(fv.String()), nil
+		return TVString(fv.String()), fv.Interface(), nil
 	case reflect.Float32, reflect.Float64:
-		return TVFloat(fv.Float()), nil
+		return TVFloat(fv.Float()), fv.Interface(), nil
 	case reflect.Ptr, reflect.Struct:
-		return &TVStruct{v: fv.Interface()}, nil
+		ret := fv.Interface()
+		return &TVStruct{v: ret}, ret, nil
 	default:
-		return nil, errors.Errorf("unsupported type of %s to get", f)
+		return nil, nil, errors.Errorf("unsupported type of %s to get", f)
 	}
 }
 
@@ -260,4 +270,11 @@ func (v TVStruct) HasField(f string) bool {
 func (v TVStruct) Equal(w TestValue) bool {
 	return w != nil && w.Type() == TestValueTypeStruct &&
 		v.v == w.(*TVStruct).v
+}
+
+func unwrapTestValue(v any) any {
+	if v, ok := v.(TestValue); ok {
+		return v.ToGoValue()
+	}
+	return v
 }

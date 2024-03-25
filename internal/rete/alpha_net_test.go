@@ -183,7 +183,7 @@ var _ = Describe("AlphaNet", func() {
 				AliasAttr: "On",
 				Value:     TVString("y"),
 				TestOp:    TestOpEqual,
-			})
+			}, false)
 			Expect(am).NotTo(BeNil())
 			Expect(an.AlphaRoot()).NotTo(BeNil())
 		})
@@ -194,14 +194,14 @@ var _ = Describe("AlphaNet", func() {
 				AliasAttr: "On",
 				Value:     TVIdentity("y"),
 				TestOp:    TestOpEqual,
-			})
+			}, false)
 			Expect(am0).NotTo(BeNil())
 			am1 := an.MakeAlphaMem(Cond{
 				Alias:     TVIdentity("x"),
 				AliasAttr: "On",
 				Value:     TVIdentity("z"),
 				TestOp:    TestOpEqual,
-			})
+			}, false)
 			Expect(am1).NotTo(BeNil())
 			Expect(fmt.Sprintf("%p", am0)).To(BeEquivalentTo(fmt.Sprintf("%p", am1)))
 		})
@@ -217,7 +217,7 @@ var _ = Describe("AlphaNet", func() {
 					Value:     TVIdentity("y"),
 					TestOp:    TestOpEqual,
 				}
-				am = an.MakeAlphaMem(cond)
+				am = an.MakeAlphaMem(cond, false)
 				an.AlphaRoot().ForEachChild(func(tn AlphaNode) (stop bool) {
 					child = tn
 					return true
@@ -237,7 +237,7 @@ var _ = Describe("AlphaNet", func() {
 					AliasAttr: "Color",
 					Value:     TVString("red"),
 					TestOp:    TestOpEqual,
-				})
+				}, false)
 				Expect(otherAM.inputAlphaNode.Parent()).Should(BeIdenticalTo(am.inputAlphaNode))
 				inputNode := am.inputAlphaNode
 				Expect(inputNode.(*TypeTestNode).FieldConstraints).
@@ -249,7 +249,7 @@ var _ = Describe("AlphaNet", func() {
 					AliasAttr: "Color",
 					Value:     NewTVNil(),
 					TestOp:    TestOpEqual,
-				})
+				}, false)
 				Expect(otherAM.inputAlphaNode.Parent()).ShouldNot(BeIdenticalTo(am.inputAlphaNode))
 			})
 		})
@@ -263,7 +263,7 @@ var _ = Describe("AlphaNet", func() {
 					AliasAttr: "Color",
 					Value:     TVString("red"),
 					TestOp:    TestOpEqual,
-				})
+				}, false)
 
 				an.AlphaRoot().ForEachChild(func(tn AlphaNode) (stop bool) {
 					child = tn
@@ -323,7 +323,7 @@ var _ = Describe("AlphaNet", func() {
 					Negative:  true,
 					TestOp:    TestOpEqual,
 				}
-				am = an.MakeAlphaMem(c)
+				am = an.MakeAlphaMem(c, true)
 				grandGrandChild = am.inputAlphaNode
 				grandChild = grandGrandChild.Parent()
 				child = grandChild.Parent()
@@ -339,7 +339,7 @@ var _ = Describe("AlphaNet", func() {
 			It("can share node with its positive node", func() {
 				pCond := c
 				pCond.Negative = false
-				pAm := an.MakeAlphaMem(pCond)
+				pAm := an.MakeAlphaMem(pCond, pCond.Negative)
 				Expect(pAm.inputAlphaNode).To(BeIdenticalTo(grandChild))
 				Expect(pAm.inputAlphaNode.Parent()).To(BeIdenticalTo(child))
 			})
@@ -356,7 +356,7 @@ var _ = Describe("AlphaNet", func() {
 				AliasAttr: "Color",
 				Value:     TVString("red"),
 				TestOp:    TestOpEqual,
-			})
+			}, false)
 		})
 
 		It("can destruct a stand-alone alpha mem", func() {
@@ -377,7 +377,7 @@ var _ = Describe("AlphaNet", func() {
 				AliasAttr: "Color",
 				Value:     TVString("blue"),
 				TestOp:    TestOpEqual,
-			})
+			}, false)
 			inputNode := am.inputAlphaNode
 			parent := inputNode.Parent()
 			grandParent := inputNode.Parent().Parent()
@@ -432,7 +432,7 @@ var _ = Describe("AlphaNet", func() {
 		BeforeEach(func() {
 			ams = make([]*AlphaMem, 0, len(conds))
 			for _, c := range conds {
-				am := an.MakeAlphaMem(c)
+				am := an.MakeAlphaMem(c, c.Negative)
 				Expect(am).NotTo(BeNil())
 				ams = append(ams, am)
 			}
@@ -512,7 +512,7 @@ var _ = Describe("AlphaNet", func() {
 
 				pc := conds[2]
 				pc.Negative = false
-				positiveAM = an.MakeAlphaMem(pc)
+				positiveAM = an.MakeAlphaMem(pc, false)
 				lo.ForEach(testFacts, func(item *Chess, _ int) {
 					an.AddFact(Fact{ID: TVIdentity(item.ID), Value: NewTVStruct(item)})
 				})
@@ -549,7 +549,7 @@ var _ = Describe("AlphaNet", func() {
 		BeforeEach(func() {
 			ams = make([]*AlphaMem, 0, len(conds))
 			for _, c := range conds {
-				am := an.MakeAlphaMem(c)
+				am := an.MakeAlphaMem(c, false)
 				Expect(am).NotTo(BeNil())
 				ams = append(ams, am)
 			}

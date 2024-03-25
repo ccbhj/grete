@@ -124,10 +124,7 @@ func typeOf[T any](v any) bool {
 	return ok
 }
 
-func Curry2[T, V any](fn func(T, V)) func(T) func(V) {
-	return func(t T) func(V) {
-		return func(v V) {
-			fn(t, v)
-		}
-	}
+func mapContains[K comparable, V any](m map[K]V, key K) bool {
+	_, in := m[key]
+	return in
 }

@@ -78,7 +78,8 @@ func (f Fact) GetValue(field string) (TestValue, error) {
 	if f.Value.Type() != TestValueTypeStruct {
 		return nil, errors.Errorf("cannot get field %s from %s", field, f.Value.Type())
 	}
-	return f.Value.(*TVStruct).GetField(field)
+	ret, _, err := f.Value.(*TVStruct).GetField(field)
+	return ret, err
 }
 
 func (f Fact) HasField(field string) bool {
@@ -97,19 +98,15 @@ type TestFunc func(condValue, wmeValue TestValue) bool
 
 // TestOp
 const (
-	testOpAlwaysTrue TestOp = iota
-	testOpAlwaysFalse
-	TestOpEqual
+	TestOpEqual TestOp = iota
 	TestOpLess
 
 	NTestOp
 )
 
 var testOp2Func = [NTestOp]TestFunc{
-	TestOpEqual:       TestEqual,
-	TestOpLess:        TestLess,
-	testOpAlwaysFalse: func(condValue, wmeValue TestValue) bool { return false },
-	testOpAlwaysTrue:  func(condValue, wmeValue TestValue) bool { return true },
+	TestOpEqual: TestEqual,
+	TestOpLess:  TestLess,
 }
 
 func (t TestOp) ToFunc() TestFunc {

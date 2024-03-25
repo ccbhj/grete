@@ -61,6 +61,19 @@ func (w *WME) HasAttr(attr string) bool {
 }
 
 func (w *WME) GetAttrValue(attr string) (TestValue, error) {
+	v, err := w.getAttrValue(attr, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return v.(TestValue), nil
+}
+
+func (w *WME) GetAttrValueRaw(attr string) (any, error) {
+	return w.getAttrValue(attr, true)
+}
+
+func (w *WME) getAttrValue(attr string, raw bool) (any, error) {
 	switch attr {
 	case FieldSelf:
 		return w.Value, nil
@@ -72,7 +85,9 @@ func (w *WME) GetAttrValue(attr string) (TestValue, error) {
 	if val.Type() != TestValueTypeStruct {
 		return nil, errors.WithMessagef(ErrFieldNotFound, "for type is %s", val.Type().String())
 	}
-	v, err := val.(*TVStruct).GetField(attr)
+
+	var ret any
+	v, rv, err := val.(*TVStruct).GetField(attr)
 	if err != nil {
 		if errors.Is(err, ErrFieldNotFound) {
 			return nil, nil
@@ -80,7 +95,12 @@ func (w *WME) GetAttrValue(attr string) (TestValue, error) {
 		return nil, err
 	}
 
-	return v, nil
+	if raw {
+		ret = rv
+	} else {
+		ret = v
+	}
+	return ret, nil
 }
 
 // _destory should only be called by an AlphaNetwork, since it manages all the WMEs
@@ -390,7 +410,7 @@ func (n *AlphaNetwork) buildOrShareNegativeTestNode(c Cond, nn negatableAlphaNod
 	return newNode
 }
 
-func (n *AlphaNetwork) MakeAlphaMem(c Cond) *AlphaMem {
+func (n *AlphaNetwork) MakeAlphaMem(c Cond, negative bool) *AlphaMem {
 	h := n.hashCond(c)
 	if am, in := n.cond2AlphaMem[h]; in {
 		return am
@@ -404,7 +424,7 @@ func (n *AlphaNetwork) MakeAlphaMem(c Cond) *AlphaMem {
 	currentNode = n.buildOrShareTestNode(currentNode, c, NewTypeTestNode)
 	if c.Value.Type() != TestValueTypeIdentity {
 		currentNode = n.buildOrShareTestNode(currentNode, c, NewConstantTestNode)
-		if c.Negative {
+		if negative {
 			nnode, ok := currentNode.(negatableAlphaNode)
 			if !ok {
 				// TODO: handle error

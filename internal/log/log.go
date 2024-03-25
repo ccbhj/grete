@@ -10,7 +10,7 @@ import (
 
 var (
 	logOut = os.Stdout
-	dbg    = true
+	dbg    = false
 	logger *log.Logger
 )
 
@@ -18,12 +18,19 @@ func init() {
 	logger = log.New(logOut, "", log.Lmicroseconds)
 }
 
-// Debug only print log when debug toggle is on
-func Debug(format string, args ...any) {
+// D only print log when debug toggle is on
+func D(format string, args ...any) {
 	if !dbg {
 		return
 	}
 	logger.Printf(logFormat(format, args...))
+}
+
+func DP(prefix, format string, args ...any) {
+	if !dbg {
+		return
+	}
+	logger.Printf(logFormat("["+prefix+"] "+format, args...))
 }
 
 func logFormat(format string, args ...any) string {
