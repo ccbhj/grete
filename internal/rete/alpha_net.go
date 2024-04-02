@@ -8,13 +8,14 @@ import (
 	"github.com/zyedidia/generic/list"
 
 	"github.com/ccbhj/grete/internal/log"
+	. "github.com/ccbhj/grete/internal/types"
 )
 
 type (
 	// WME is the working memory element, use to store the fact when matching
 	WME struct {
-		ID    TVIdentity
-		Value TestValue
+		ID    GVIdentity
+		Value GValue
 
 		tokens       set[*Token]
 		alphaMems    set[*AlphaMem]
@@ -22,7 +23,7 @@ type (
 	}
 )
 
-func NewWME(name TVIdentity, value TestValue) *WME {
+func NewWME(name GVIdentity, value GValue) *WME {
 	return &WME{
 		ID:    name,
 		Value: value,
@@ -54,19 +55,19 @@ func (w *WME) HasAttr(attr string) bool {
 	}
 	val := w.Value
 	// ony TVStruct has fields other than FieldSelf
-	if val.Type() != TestValueTypeStruct {
+	if val.Type() != GValueTypeStruct {
 		return false
 	}
-	return val.(*TVStruct).HasField(attr)
+	return val.(*GVStruct).HasField(attr)
 }
 
-func (w *WME) GetAttrValue(attr string) (TestValue, error) {
+func (w *WME) GetAttrValue(attr string) (GValue, error) {
 	v, err := w.getAttrValue(attr, false)
 	if err != nil {
 		return nil, err
 	}
 
-	return v.(TestValue), nil
+	return v.(GValue), nil
 }
 
 func (w *WME) GetAttrValueRaw(attr string) (any, error) {
@@ -82,12 +83,12 @@ func (w *WME) getAttrValue(attr string, raw bool) (any, error) {
 	}
 	val := w.Value
 	// ony TVStruct has fields other than FieldSelf
-	if val.Type() != TestValueTypeStruct {
+	if val.Type() != GValueTypeStruct {
 		return nil, errors.WithMessagef(ErrFieldNotFound, "for type is %s", val.Type().String())
 	}
 
 	var ret any
-	v, rv, err := val.(*TVStruct).GetField(attr)
+	v, rv, err := val.(*GVStruct).GetField(attr)
 	if err != nil {
 		if errors.Is(err, ErrFieldNotFound) {
 			return nil, nil
@@ -159,7 +160,7 @@ type (
 
 func (w *WME) passAllConstantTest(c Cond) bool {
 	return w.HasAttr(string(c.AliasAttr)) &&
-		((c.Value.Type() == TestValueTypeIdentity) || c.TestOp.ToFunc()(c.Value, w.Value))
+		((c.Value.Type() == GValueTypeIdentity) || c.TestOp.ToFunc()(c.Value, w.Value))
 }
 
 func newAlphaMem(cond Cond, input AlphaNode, an *AlphaNetwork) *AlphaMem {
@@ -422,7 +423,7 @@ func (n *AlphaNetwork) MakeAlphaMem(c Cond, negative bool) *AlphaMem {
 
 	// test type
 	currentNode = n.buildOrShareTestNode(currentNode, c, NewTypeTestNode)
-	if c.Value.Type() != TestValueTypeIdentity {
+	if c.Value.Type() != GValueTypeIdentity {
 		currentNode = n.buildOrShareTestNode(currentNode, c, NewConstantTestNode)
 		if negative {
 			nnode, ok := currentNode.(negatableAlphaNode)
@@ -502,7 +503,7 @@ func (n *AlphaNetwork) hashCond(c Cond) uint64 {
 	// since we will not test Value whose type is TestValueTypeIdentity, we can mask it when hasing conds so that Cond($x, ^On, $y) and Cond($x, ^On, ^z) will be treated as they are the same.
 
 	var opt uint64
-	if c.Value.Type() == TestValueTypeIdentity {
+	if c.Value.Type() == GValueTypeIdentity {
 		opt |= CondHashOptMaskValue
 	}
 	h := c.Hash(opt)
@@ -611,7 +612,7 @@ type TypeTestNode struct {
 	*alphaNode       `hash:"ignore"`
 	TypeInfo         *TypeInfo      `hash:"ignore"` // TypeInfo specified in a Cond
 	FieldConstraints map[string]int `hash:"ignore"` // field names we learned from conditions, and its reference count(count of cond)
-	Alias            TVIdentity
+	Alias            GVIdentity
 }
 
 var _ AlphaNode = (*TypeTestNode)(nil)
@@ -653,23 +654,23 @@ func (t *TypeTestNode) Adjust(c Cond) {
 func (t *TypeTestNode) PerformTest(w *WME) (bool, error) {
 	if t.TypeInfo != nil {
 		switch t.TypeInfo.T {
-		case TestValueTypeInt, TestValueTypeUint,
-			TestValueTypeFloat, TestValueTypeString:
+		case GValueTypeInt, GValueTypeUint,
+			GValueTypeFloat, GValueTypeString:
 			return t.TypeInfo.T == w.Value.Type(), nil
-		case TestValueTypeStruct:
-			return w.Value.Type() == TestValueTypeStruct && t.checkStructType(w), nil
-		case TestValueTypeUnknown:
+		case GValueTypeStruct:
+			return w.Value.Type() == GValueTypeStruct && t.checkStructType(w), nil
+		case GValueTypeUnknown:
 			// unknow type ? leave it until we perform the test op
 			return true, nil
 		}
 	} else if len(t.FieldConstraints) > 0 {
-		return w.Value.Type() == TestValueTypeStruct && t.checkFieldConstraints(w), nil
+		return w.Value.Type() == GValueTypeStruct && t.checkFieldConstraints(w), nil
 	}
 	return true, nil
 }
 
 func (t *TypeTestNode) checkFieldConstraints(w *WME) bool {
-	v := w.Value.(*TVStruct).v
+	v := w.Value.(*GVStruct).V
 	vt := reflect.TypeOf(v)
 	if vt.Kind() == reflect.Ptr {
 		vt = vt.Elem()
@@ -687,7 +688,7 @@ func (t *TypeTestNode) checkFieldConstraints(w *WME) bool {
 
 func (t *TypeTestNode) checkStructType(w *WME) bool {
 	tf := t.TypeInfo
-	v := w.Value.(*TVStruct).v
+	v := w.Value.(*GVStruct).V
 	vt := reflect.TypeOf(v)
 	if vt.Kind() == reflect.Ptr {
 		vt = vt.Elem()
@@ -703,7 +704,7 @@ func (t *TypeTestNode) checkStructType(w *WME) bool {
 		if !in {
 			return false
 		}
-		if t == TestValueTypeUnknown || t == TestValueTypeStruct {
+		if t == GValueTypeUnknown || t == GValueTypeStruct {
 			// skip field type checking
 			continue
 		}
@@ -729,7 +730,7 @@ type ConstantTestNode struct {
 	*alphaNode   `hash:"ignore"`
 	negativeNode *NegativeTestNode `hash:"ignore"`
 	Field        string            // which field in WME we gonna test
-	V            TestValue         // the value to be compared
+	V            GValue            // the value to be compared
 	TestOp       TestOp            // test operation
 }
 

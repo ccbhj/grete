@@ -5,6 +5,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	. "github.com/ccbhj/grete/internal/rete"
+	. "github.com/ccbhj/grete/internal/types"
 )
 
 var _ = Describe("Cond", func() {
@@ -13,7 +14,7 @@ var _ = Describe("Cond", func() {
 		cond = &Cond{
 			Alias:     "Foo",
 			AliasAttr: "field",
-			Value:     TVString("bar"),
+			Value:     GVString("bar"),
 			Negative:  false,
 			TestOp:    TestOpLess,
 		}
@@ -45,7 +46,7 @@ var _ = Describe("Cond", func() {
 		opt := CondHashOptMaskValue
 		hash := cond.Hash(opt)
 		otherCond := cond
-		otherCond.Value = TVIdentity("X")
+		otherCond.Value = GVIdentity("X")
 		Expect(otherCond).NotTo(BeZero())
 		Expect(hash).Should(BeEquivalentTo(otherCond.Hash(opt)))
 	})

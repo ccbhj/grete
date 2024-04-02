@@ -7,6 +7,7 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/ccbhj/grete/internal/log"
+	. "github.com/ccbhj/grete/internal/types"
 )
 
 type (
@@ -268,7 +269,7 @@ func buildJoinTestFromConds(c Cond, prevConds []Cond) []*TestAtJoinNode {
 			// JT(ID, ID)
 			addNode(FieldID, FieldID, TestOpEqual, false)
 		}
-		if prevCond.Value.Type() == TestValueTypeIdentity && prevCond.Value == id {
+		if prevCond.Value.Type() == GValueTypeIdentity && prevCond.Value == id {
 			// JT(ID, Value) -> JT(Self, Value)
 			// When performing test between ID and Value, we should use FieldSelf instead of FieldID,
 			// Attention: the lhs and rhs order must be reversed here
@@ -443,11 +444,11 @@ func (pn *PNode) AnyMatches() bool {
 }
 
 // Matches figure out what the value of the aliases in each match
-func (pn *PNode) Matches() ([]map[TVIdentity]any, error) {
-	matches := make([]map[TVIdentity]any, 0, len(pn.items))
+func (pn *PNode) Matches() ([]map[GVIdentity]any, error) {
+	matches := make([]map[GVIdentity]any, 0, len(pn.items))
 	for item := range pn.items {
 		log.BugOn(item.nJoinResults.Len() == 0, "item %s has join result => %+v", item, item.nJoinResults)
-		match := make(map[TVIdentity]any, len(pn.lhs))
+		match := make(map[GVIdentity]any, len(pn.lhs))
 		stk := make([]*WME, 0, item.level)
 		// collect all the wme of the token
 		for root := item; root != nil && root.level > 0; root = root.parent {
@@ -460,19 +461,19 @@ func (pn *PNode) Matches() ([]map[TVIdentity]any, error) {
 		j := len(stk) - 1
 		for i := 0; i < len(pn.lhs) && j >= 0; i++ {
 			c, wme := pn.lhs[i], stk[j]
-			negativeJoinNode := c.Negative && c.Value.Type() == TestValueTypeIdentity
+			negativeJoinNode := c.Negative && c.Value.Type() == GValueTypeIdentity
 			if negativeJoinNode {
 				continue
 			}
 			_, in := match[c.Alias]
 			if !in {
-				match[c.Alias] = unwrapTestValue(wme.Value)
+				match[c.Alias] = UnwrapTestValue(wme.Value)
 			}
-			if c.Value.Type() == TestValueTypeIdentity && !mapContains(match, c.Value.(TVIdentity)) {
-				valueID := c.Value.(TVIdentity)
+			if c.Value.Type() == GValueTypeIdentity && !mapContains(match, c.Value.(GVIdentity)) {
+				valueID := c.Value.(GVIdentity)
 				v, err := wme.GetAttrValueRaw(string(c.AliasAttr))
 				if err == nil {
-					match[valueID] = unwrapTestValue(v)
+					match[valueID] = UnwrapTestValue(v)
 				} else {
 					// TODO: handle error
 					return nil, errors.WithMessagef(err, "fail to GetAttrValue(%s) of WME(%v)", c.AliasAttr, wme.Value)
@@ -652,7 +653,7 @@ func (bn *BetaNetwork) buildOrShareNetwork(parent ReteNode, conds []Cond, earlie
 			negativeAM, negativeJoinNode bool
 		)
 		if c.Negative {
-			negativeAM = c.Value.Type() != TestValueTypeIdentity
+			negativeAM = c.Value.Type() != GValueTypeIdentity
 			negativeJoinNode = !negativeAM
 		}
 
@@ -673,7 +674,7 @@ func (bn *BetaNetwork) buildOrShareNetwork(parent ReteNode, conds []Cond, earlie
 }
 
 func isCondNeedNegativeJoin(c Cond) bool {
-	return c.Negative && c.Value.Type() == TestValueTypeIdentity
+	return c.Negative && c.Value.Type() == GValueTypeIdentity
 }
 
 func (bn *BetaNetwork) buildOrShareJoinNode(parent ReteNode, am *AlphaMem, tests []*TestAtJoinNode) *JoinNode {

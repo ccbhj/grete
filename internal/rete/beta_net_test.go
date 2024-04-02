@@ -1,6 +1,7 @@
 package rete
 
 import (
+	. "github.com/ccbhj/grete/internal/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
@@ -13,7 +14,7 @@ var _ = Describe("JoinTest", func() {
 		toWME    = func(c *Chess) *WME {
 			return &WME{
 				ID:    c.ID,
-				Value: NewTVStruct(c),
+				Value: NewGVStruct(c),
 			}
 		}
 	)
@@ -34,12 +35,12 @@ var _ = Describe("JoinTest", func() {
 			c1 := Cond{
 				Alias:     "X",
 				AliasAttr: "Color",
-				Value:     TVString("red"),
+				Value:     GVString("red"),
 			}
 			c2 := Cond{
 				Alias:     "Y",
 				AliasAttr: "On",
-				Value:     TVString("table"),
+				Value:     GVString("table"),
 			}
 
 			Expect(buildJoinTestFromConds(c1, nil)).Should(BeEmpty())
@@ -50,17 +51,17 @@ var _ = Describe("JoinTest", func() {
 			c1 := Cond{
 				Alias:     "TABLE",
 				AliasAttr: "Rank",
-				Value:     TVInt(0),
+				Value:     GVInt(0),
 			}
 			c2 := Cond{
 				Alias:     "TABLE",
 				AliasAttr: "On",
-				Value:     NewTVNil(),
+				Value:     NewGVNil(),
 			}
 			c3 := Cond{
 				Alias:     "TABLE",
 				AliasAttr: "Color",
-				Value:     TVString(""),
+				Value:     GVString(""),
 			}
 			Expect(buildJoinTestFromConds(c1, nil)).Should(BeEmpty())
 			jts := buildJoinTestFromConds(c2, []Cond{c1})
@@ -91,12 +92,12 @@ var _ = Describe("JoinTest", func() {
 			c1 := Cond{
 				Alias:     "X",
 				AliasAttr: "On",
-				Value:     TVIdentity("TABLE"),
+				Value:     GVIdentity("TABLE"),
 			}
 			c2 := Cond{
 				Alias:     "TABLE",
 				AliasAttr: "Color",
-				Value:     TVString(""),
+				Value:     GVString(""),
 			}
 			Expect(buildJoinTestFromConds(c1, nil)).Should(BeEmpty())
 			jts := buildJoinTestFromConds(c2, []Cond{c1})
@@ -116,12 +117,12 @@ var _ = Describe("JoinTest", func() {
 			c1 := Cond{
 				Alias:     "TABLE",
 				AliasAttr: "Color",
-				Value:     TVString(""),
+				Value:     GVString(""),
 			}
 			c2 := Cond{
 				Alias:     "X",
 				AliasAttr: "On",
-				Value:     TVIdentity("TABLE"),
+				Value:     GVIdentity("TABLE"),
 			}
 			Expect(buildJoinTestFromConds(c1, nil)).Should(BeEmpty())
 			jts := buildJoinTestFromConds(c2, []Cond{c1})
@@ -164,7 +165,7 @@ var _ = Describe("BetaNet", func() {
 				pNode := bn.AddProduction("test", Cond{
 					Alias:     "x",
 					AliasAttr: "Color",
-					Value:     TVString("red"),
+					Value:     GVString("red"),
 					TestOp:    TestOpEqual,
 				})
 				Expect(pNode.AnyMatches()).To(BeFalse())
@@ -179,21 +180,21 @@ var _ = Describe("BetaNet", func() {
 			It("can add production with more than one condition", func() {
 				pNode := bn.AddProduction("test case from Fig2.2 in paper",
 					Cond{
-						Alias:     TVIdentity("x"),
+						Alias:     GVIdentity("x"),
 						AliasAttr: "On",
-						Value:     TVIdentity("y"),
+						Value:     GVIdentity("y"),
 						TestOp:    TestOpEqual,
 					},
 					Cond{
-						Alias:     TVIdentity("y"),
+						Alias:     GVIdentity("y"),
 						AliasAttr: "LeftOf",
-						Value:     TVIdentity("z"),
+						Value:     GVIdentity("z"),
 						TestOp:    TestOpEqual,
 					},
 					Cond{
-						Alias:     TVIdentity("z"),
+						Alias:     GVIdentity("z"),
 						AliasAttr: "Color",
-						Value:     TVString("red"),
+						Value:     GVString("red"),
 						TestOp:    TestOpEqual,
 					})
 
@@ -223,17 +224,17 @@ var _ = Describe("BetaNet", func() {
 				const ruleID = "single rule"
 				px := bn.AddProduction(ruleID,
 					Cond{
-						Alias:     TVIdentity("z"),
+						Alias:     GVIdentity("z"),
 						AliasAttr: "Color",
-						Value:     TVString("red"),
+						Value:     GVString("red"),
 						TestOp:    TestOpEqual,
 					})
 
 				py := bn.AddProduction(ruleID,
 					Cond{
-						Alias:     TVIdentity("z"),
+						Alias:     GVIdentity("z"),
 						AliasAttr: "Color",
-						Value:     TVString("red"),
+						Value:     GVString("red"),
 						TestOp:    TestOpEqual,
 					})
 				Expect(px).To(BeEquivalentTo(py))
@@ -245,41 +246,41 @@ var _ = Describe("BetaNet", func() {
 			It("can share same beta memory", func() {
 				pNodeX := bn.AddProduction("X",
 					Cond{
-						Alias:     TVIdentity("x"),
+						Alias:     GVIdentity("x"),
 						AliasAttr: "On",
-						Value:     TVIdentity("y"),
+						Value:     GVIdentity("y"),
 						TestOp:    TestOpEqual,
 					},
 					Cond{
-						Alias:     TVIdentity("y"),
+						Alias:     GVIdentity("y"),
 						AliasAttr: "LeftOf",
-						Value:     TVIdentity("z"),
+						Value:     GVIdentity("z"),
 						TestOp:    TestOpEqual,
 					},
 					Cond{
-						Alias:     TVIdentity("z"),
+						Alias:     GVIdentity("z"),
 						AliasAttr: "Color",
-						Value:     TVString("red"),
+						Value:     GVString("red"),
 						TestOp:    TestOpEqual,
 					})
 
 				pNodeY := bn.AddProduction("Y",
 					Cond{
-						Alias:     TVIdentity("x"),
+						Alias:     GVIdentity("x"),
 						AliasAttr: "On",
-						Value:     TVIdentity("y"),
+						Value:     GVIdentity("y"),
 						TestOp:    TestOpEqual,
 					},
 					Cond{
-						Alias:     TVIdentity("y"),
+						Alias:     GVIdentity("y"),
 						AliasAttr: "LeftOf",
-						Value:     TVIdentity("z"),
+						Value:     GVIdentity("z"),
 						TestOp:    TestOpEqual,
 					},
 					Cond{ // diferent rule here
-						Alias:     TVIdentity("z"),
+						Alias:     GVIdentity("z"),
 						AliasAttr: "Color",
-						Value:     TVString("blue"),
+						Value:     GVString("blue"),
 						TestOp:    TestOpEqual,
 					})
 
@@ -299,7 +300,7 @@ var _ = Describe("BetaNet", func() {
 				testChessFacts = lo.Map(testChesses, func(item *Chess, index int) Fact {
 					return Fact{
 						ID:    item.ID,
-						Value: NewTVStruct(item),
+						Value: NewGVStruct(item),
 					}
 				})
 				redChesses = lo.Filter(testChesses, func(item *Chess, index int) bool {
@@ -308,7 +309,7 @@ var _ = Describe("BetaNet", func() {
 				redChessFacts = lo.Map(redChesses, func(item *Chess, index int) Fact {
 					return Fact{
 						ID:    item.ID,
-						Value: NewTVStruct(item),
+						Value: NewGVStruct(item),
 					}
 				})
 			})
@@ -325,7 +326,7 @@ var _ = Describe("BetaNet", func() {
 				singleRule := bn.AddProduction(ruleName, Cond{
 					Alias:     "X",
 					AliasAttr: "Color",
-					Value:     TVString("red"),
+					Value:     GVString("red"),
 					TestOp:    TestOpEqual,
 				})
 				lo.ForEach(redChessFacts, ignoreIndex(bn.AddFact))
@@ -345,7 +346,7 @@ var _ = Describe("BetaNet", func() {
 				singleRule = bn.AddProduction(ruleName, Cond{
 					Alias:     "x",
 					AliasAttr: "Color",
-					Value:     TVString("red"),
+					Value:     GVString("red"),
 					TestOp:    TestOpEqual,
 				})
 				Expect(singleRule).ShouldNot(BeNil())
@@ -361,21 +362,21 @@ var _ = Describe("BetaNet", func() {
 				const ruleName = "multi_rule"
 				rules := []Cond{
 					{
-						Alias:     TVIdentity("x"),
+						Alias:     GVIdentity("x"),
 						AliasAttr: "On",
-						Value:     TVIdentity("y"),
+						Value:     GVIdentity("y"),
 						TestOp:    TestOpEqual,
 					},
 					{
-						Alias:     TVIdentity("y"),
+						Alias:     GVIdentity("y"),
 						AliasAttr: "LeftOf",
-						Value:     TVIdentity("z"),
+						Value:     GVIdentity("z"),
 						TestOp:    TestOpEqual,
 					},
 					{
-						Alias:     TVIdentity("z"),
+						Alias:     GVIdentity("z"),
 						AliasAttr: "Color",
-						Value:     TVString("red"),
+						Value:     GVString("red"),
 						TestOp:    TestOpEqual,
 					}}
 				multiRule := bn.AddProduction(ruleName, rules...)
@@ -396,7 +397,7 @@ var _ = Describe("BetaNet", func() {
 				multiRule = bn.AddProduction(ruleName, Cond{
 					Alias:     "X",
 					AliasAttr: "Color",
-					Value:     TVString("red"),
+					Value:     GVString("red"),
 					TestOp:    TestOpEqual,
 				})
 				Expect(multiRule).ShouldNot(BeNil())
@@ -414,7 +415,7 @@ var _ = Describe("BetaNet", func() {
 					singleRule := bn.AddProduction(singleNegativeRule, Cond{
 						Alias:     "X",
 						AliasAttr: "Color",
-						Value:     TVString("red"),
+						Value:     GVString("red"),
 						Negative:  true,
 					})
 					lo.ForEach(testChessFacts, ignoreIndex(bn.AddFact))
@@ -436,29 +437,29 @@ var _ = Describe("BetaNet", func() {
 						Cond{
 							Alias:     "X",
 							AliasAttr: FieldSelf,
-							Value:     NewTVStruct(chesses[0]),
+							Value:     NewGVStruct(chesses[0]),
 						},
 						Cond{
 							Alias:     "X",
 							AliasAttr: "Color",
-							Value:     TVIdentity("c1"),
+							Value:     GVIdentity("c1"),
 						},
 						Cond{
 							Alias:     "Y",
 							AliasAttr: "Color",
-							Value:     TVIdentity("c2"),
+							Value:     GVIdentity("c2"),
 						},
 						Cond{
 							Alias:     "c1",
 							AliasAttr: FieldID,
-							Value:     TVIdentity("c2"),
+							Value:     GVIdentity("c2"),
 							Negative:  true,
 						},
 					)
 
 					lo.ForEach(
 						lo.Map(chesses[:3], func(c *Chess, i int) Fact {
-							return Fact{ID: c.ID, Value: NewTVStruct(c)}
+							return Fact{ID: c.ID, Value: NewGVStruct(c)}
 						}),
 						ignoreIndex(bn.AddFact))
 					Expect(multiRules.AnyMatches()).To(BeTrue())
@@ -518,46 +519,46 @@ var _ = Describe("BetaNet", func() {
 			singleRule = bn.AddProduction("single_rule", Cond{
 				Alias:     "x",
 				AliasAttr: "Color",
-				Value:     TVString("red"),
+				Value:     GVString("red"),
 				TestOp:    TestOpEqual,
 			})
 			signleNegativeRule = bn.AddProduction("single_negative_rule", Cond{
 				Alias:     "x",
 				AliasAttr: "Color",
-				Value:     TVString("red"),
+				Value:     GVString("red"),
 				TestOp:    TestOpEqual,
 				Negative:  true,
 			})
 
 			multiRule = bn.AddProduction("multi_rule",
 				Cond{
-					Alias:     TVIdentity("table"),
+					Alias:     GVIdentity("table"),
 					AliasAttr: "On",
-					Value:     NewTVNil(),
+					Value:     NewGVNil(),
 					TestOp:    TestOpEqual,
 				},
 				Cond{
-					Alias:     TVIdentity("x"),
+					Alias:     GVIdentity("x"),
 					AliasAttr: "On",
-					Value:     TVIdentity("y"),
+					Value:     GVIdentity("y"),
 					TestOp:    TestOpEqual,
 				},
 				Cond{
-					Alias:     TVIdentity("y"),
+					Alias:     GVIdentity("y"),
 					AliasAttr: "LeftOf",
-					Value:     TVIdentity("z"),
+					Value:     GVIdentity("z"),
 					TestOp:    TestOpEqual,
 				},
 				Cond{
-					Alias:     TVIdentity("z"),
+					Alias:     GVIdentity("z"),
 					AliasAttr: "Color",
-					Value:     TVString("red"),
+					Value:     GVString("red"),
 					TestOp:    TestOpEqual,
 				},
 				Cond{
-					Alias:     TVIdentity("z"),
+					Alias:     GVIdentity("z"),
 					AliasAttr: "On",
-					Value:     TVIdentity("table"),
+					Value:     GVIdentity("table"),
 					TestOp:    TestOpEqual,
 				},
 			)
@@ -565,34 +566,34 @@ var _ = Describe("BetaNet", func() {
 				Cond{
 					Alias:     "x",
 					AliasAttr: "On",
-					Value:     TVIdentity("y"),
+					Value:     GVIdentity("y"),
 					TestOp:    TestOpEqual,
 				},
 				Cond{
 					Alias:     "TABLE",
 					AliasAttr: "Color",
-					Value:     TVString(""),
+					Value:     GVString(""),
 					TestOp:    TestOpEqual,
 				},
 				Cond{
 					Alias:     "x",
 					AliasAttr: "Color",
-					Value:     TVString(""),
+					Value:     GVString(""),
 					TestOp:    TestOpEqual,
 					Negative:  true,
 				},
 				Cond{
 					Alias:     "y",
 					AliasAttr: FieldSelf,
-					Value:     TVIdentity("TABLE"),
+					Value:     GVIdentity("TABLE"),
 					TestOp:    TestOpEqual,
 					Negative:  true,
 				})
 
 			lo.ForEach(testChesses, func(c *Chess, _ int) {
 				bn.AddFact(Fact{
-					ID:    TVIdentity(c.ID),
-					Value: NewTVStruct(c),
+					ID:    GVIdentity(c.ID),
+					Value: NewGVStruct(c),
 				})
 			})
 		})
@@ -607,7 +608,7 @@ var _ = Describe("BetaNet", func() {
 		Context("matching facts with single rule", func() {
 			var (
 				redChess []*Chess
-				matches  []map[TVIdentity]any
+				matches  []map[GVIdentity]any
 				err      error
 			)
 			BeforeEach(func() {
@@ -621,7 +622,7 @@ var _ = Describe("BetaNet", func() {
 			It("should match some facts", func() {
 				Expect(matches).Should(HaveLen(len(redChess)))
 				for _, fact := range redChess {
-					Expect(matches).To(ContainElement(map[TVIdentity]any{
+					Expect(matches).To(ContainElement(map[GVIdentity]any{
 						"x": fact,
 					}))
 				}
@@ -629,11 +630,11 @@ var _ = Describe("BetaNet", func() {
 
 			It("should still match some facts after removing one", func() {
 				bn.RemoveFact(Fact{
-					ID:    TVIdentity(redChess[0].ID),
-					Value: NewTVStruct(redChess[0]),
+					ID:    GVIdentity(redChess[0].ID),
+					Value: NewGVStruct(redChess[0]),
 				})
 				for _, chess := range redChess[:] {
-					Expect(matches).To(ContainElement(map[TVIdentity]any{
+					Expect(matches).To(ContainElement(map[GVIdentity]any{
 						"x": chess,
 					}))
 				}
@@ -642,8 +643,8 @@ var _ = Describe("BetaNet", func() {
 			It("should not match any facts after removing all", func() {
 				for _, fact := range redChess {
 					bn.RemoveFact(Fact{
-						ID:    TVIdentity(fact.ID),
-						Value: NewTVStruct(fact),
+						ID:    GVIdentity(fact.ID),
+						Value: NewGVStruct(fact),
 					})
 				}
 				Expect(singleRule.AnyMatches()).Should(BeFalse())
@@ -657,15 +658,15 @@ var _ = Describe("BetaNet", func() {
 				Expect(err).To(BeNil())
 				Expect(matches).To(HaveLen(1))
 				Expect(matches[0]).Should(And(
-					HaveKeyWithValue(TVIdentity("x"), testChesses[0]),
-					HaveKeyWithValue(TVIdentity("y"), testChesses[1]),
-					HaveKeyWithValue(TVIdentity("z"), testChesses[2]),
-					HaveKeyWithValue(TVIdentity("table"), testChesses[3]),
+					HaveKeyWithValue(GVIdentity("x"), testChesses[0]),
+					HaveKeyWithValue(GVIdentity("y"), testChesses[1]),
+					HaveKeyWithValue(GVIdentity("z"), testChesses[2]),
+					HaveKeyWithValue(GVIdentity("table"), testChesses[3]),
 				))
 			})
 
 			It("should not match any facts after removing one of the matched fact", func() {
-				f := Fact{ID: TVIdentity(testChesses[3].ID), Value: NewTVStruct(testChesses[3])}
+				f := Fact{ID: GVIdentity(testChesses[3].ID), Value: NewGVStruct(testChesses[3])}
 				bn.RemoveFact(f)
 				Expect(multiRule.AnyMatches()).Should(BeFalse())
 
@@ -675,10 +676,10 @@ var _ = Describe("BetaNet", func() {
 				Expect(err).To(BeNil())
 				Expect(matches).To(HaveLen(1))
 				Expect(matches[0]).Should(And(
-					HaveKeyWithValue(TVIdentity("x"), testChesses[0]),
-					HaveKeyWithValue(TVIdentity("y"), testChesses[1]),
-					HaveKeyWithValue(TVIdentity("z"), testChesses[2]),
-					HaveKeyWithValue(TVIdentity("table"), testChesses[3]),
+					HaveKeyWithValue(GVIdentity("x"), testChesses[0]),
+					HaveKeyWithValue(GVIdentity("y"), testChesses[1]),
+					HaveKeyWithValue(GVIdentity("z"), testChesses[2]),
+					HaveKeyWithValue(GVIdentity("table"), testChesses[3]),
 				))
 			})
 		})
@@ -692,7 +693,7 @@ var _ = Describe("BetaNet", func() {
 				})
 				Expect(matches).Should(HaveLen(len(nonRedChesses)))
 				for _, chess := range nonRedChesses {
-					Expect(matches).To(ContainElement(map[TVIdentity]any{
+					Expect(matches).To(ContainElement(map[GVIdentity]any{
 						"x": chess,
 					}))
 				}
@@ -708,28 +709,28 @@ var _ = Describe("BetaNet", func() {
 				Expect(matches).To(HaveLen(2))
 				Expect(matches[0]).Should(Or(
 					And(
-						HaveKeyWithValue(TVIdentity("x"), testChesses[0]),
-						HaveKeyWithValue(TVIdentity("y"), testChesses[1]),
-						HaveKeyWithValue(TVIdentity("TABLE"), testChesses[3])),
+						HaveKeyWithValue(GVIdentity("x"), testChesses[0]),
+						HaveKeyWithValue(GVIdentity("y"), testChesses[1]),
+						HaveKeyWithValue(GVIdentity("TABLE"), testChesses[3])),
 					And(
-						HaveKeyWithValue(TVIdentity("x"), testChesses[1]),
-						HaveKeyWithValue(TVIdentity("y"), testChesses[2]),
-						HaveKeyWithValue(TVIdentity("TABLE"), testChesses[3]),
+						HaveKeyWithValue(GVIdentity("x"), testChesses[1]),
+						HaveKeyWithValue(GVIdentity("y"), testChesses[2]),
+						HaveKeyWithValue(GVIdentity("TABLE"), testChesses[3]),
 					)))
 				Expect(matches[1]).Should(Or(
 					And(
-						HaveKeyWithValue(TVIdentity("x"), testChesses[0]),
-						HaveKeyWithValue(TVIdentity("y"), testChesses[1]),
-						HaveKeyWithValue(TVIdentity("TABLE"), testChesses[3])),
+						HaveKeyWithValue(GVIdentity("x"), testChesses[0]),
+						HaveKeyWithValue(GVIdentity("y"), testChesses[1]),
+						HaveKeyWithValue(GVIdentity("TABLE"), testChesses[3])),
 					And(
-						HaveKeyWithValue(TVIdentity("x"), testChesses[1]),
-						HaveKeyWithValue(TVIdentity("y"), testChesses[2]),
-						HaveKeyWithValue(TVIdentity("TABLE"), testChesses[3]),
+						HaveKeyWithValue(GVIdentity("x"), testChesses[1]),
+						HaveKeyWithValue(GVIdentity("y"), testChesses[2]),
+						HaveKeyWithValue(GVIdentity("TABLE"), testChesses[3]),
 					)))
 
-				bn.RemoveFact(Fact{ID: testChesses[0].ID, Value: NewTVStruct(testChesses[0])})
+				bn.RemoveFact(Fact{ID: testChesses[0].ID, Value: NewGVStruct(testChesses[0])})
 				Expect(multiNegativeRule.Matches()).To(HaveLen(1))
-				bn.AddFact(Fact{ID: testChesses[0].ID, Value: NewTVStruct(testChesses[0])})
+				bn.AddFact(Fact{ID: testChesses[0].ID, Value: NewGVStruct(testChesses[0])})
 				Expect(multiNegativeRule.Matches()).To(HaveLen(2))
 			})
 		})
