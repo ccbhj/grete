@@ -1,21 +1,30 @@
 package rete
 
 import (
-	"fmt"
+	"github.com/pkg/errors"
 
 	. "github.com/ccbhj/grete/internal/types"
-	"github.com/pkg/errors"
 )
 
 type (
-	Cond struct {
+	Selector struct {
 		Alias     GVIdentity
 		AliasAttr GVString
-		Value     GValue
+	}
+
+	// Guard define constant test on value
+	Guard struct {
+		AliasAttr GVString
+		Value     GValue // should never be GVIdentity
 		Negative  bool
 		TestOp    TestOp
+	}
 
-		AliasType *TypeInfo
+	// JoinTest define join tests between two or more than two values
+	JoinTest struct {
+		Alias    []Selector
+		TestOp   TestOp
+		Negative bool
 	}
 )
 
@@ -34,23 +43,9 @@ const (
 	condTestNegativeFlag uint64 = 1 << 63
 )
 
-const (
-	CondHashOptMaskID uint64 = 1 << (iota)
-	CondHashOptMaskValue
-)
-
-func (c Cond) Hash(opt uint64) uint64 {
-	const condHashOptMaskIDAndValue = (CondHashOptMaskID | CondHashOptMaskValue)
-	var x uint64 = 1
-	if b := opt & condHashOptMaskIDAndValue; b == 0 {
-		x = mix64(mix64(c.Alias.Hash(), c.AliasAttr.Hash()), c.Value.Hash())
-	} else if b == condHashOptMaskIDAndValue {
-		x = c.AliasAttr.Hash()
-	} else if opt&CondHashOptMaskID != 0 {
-		x = mix64(c.Value.Hash(), c.AliasAttr.Hash())
-	} else if opt&CondHashOptMaskValue != 0 {
-		x = mix64(c.Alias.Hash(), c.AliasAttr.Hash())
-	}
+func (c Guard) Hash() uint64 {
+	var x uint64
+	x = mix64(c.Value.Hash(), c.AliasAttr.Hash())
 	x = uint64(mix32(uint32(x), uint32(x>>32)))
 	ret := ((uint64(c.TestOp) << condTestOpTypeOffset) & condTestOpTypeMask) | x
 	if c.Negative {
@@ -95,7 +90,7 @@ func (f Fact) HasField(field string) bool {
 
 type TestOp int
 
-type TestFunc func(condValue, wmeValue GValue) bool
+type TestFunc func(...GValue) (bool, error)
 
 // TestOp
 const (
@@ -104,6 +99,16 @@ const (
 
 	NTestOp
 )
+
+func (t TestOp) String() string {
+	switch t {
+	case TestOpEqual:
+		return "eq"
+	case TestOpLess:
+		return "less"
+	}
+	return "unknown"
+}
 
 var testOp2Func = [NTestOp]TestFunc{
 	TestOpEqual: TestEqual,
@@ -114,30 +119,41 @@ func (t TestOp) ToFunc() TestFunc {
 	return testOp2Func[t]
 }
 
-// TestFunc
-func TestEqual(x, y GValue) bool {
+////////////////////////////////////////////////////////////////////////////////////////////////
+// Testing functions for TestOp
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+func TestEqual(args ...GValue) (bool, error) {
+	if len(args) < 2 {
+		return false, errors.Errorf("TestOpEqual requires at least two args, but got %d", len(args))
+	}
+	x, y := args[0], args[1]
 	// TODO: check types of x and y
-	return x.Equal(y)
+	return x.Equal(y), nil
 }
 
-func TestLess(l, r GValue) bool {
+func TestLess(args ...GValue) (bool, error) {
+	if len(args) < 2 {
+		return false, errors.Errorf("TestOpLess requires at least two args, but got %d", len(args))
+	}
+	l, r := args[0], args[1]
 	if l.Type() != r.Type() {
 		if x, ok := conv2Float(l); ok {
 			if y, ok := conv2Float(r); ok {
-				return x < y
+				return x < y, nil
 			}
 		}
-		panic("cannot compare value with different type")
+		return false, errors.New("cannot compare value with different type")
 	}
 	switch l.Type() {
 	case GValueTypeInt:
-		return l.(GVInt) < r.(GVInt)
+		return l.(GVInt) < r.(GVInt), nil
 	case GValueTypeUint:
-		return l.(GVUint) < r.(GVUint)
+		return l.(GVUint) < r.(GVUint), nil
 	case GValueTypeFloat:
-		return l.(GVFloat) < r.(GVFloat)
+		return l.(GVFloat) < r.(GVFloat), nil
 	}
-	panic(fmt.Sprintf("less operator is unsupported for type %s", l.Type()))
+	return false, errors.Errorf("less operator is unsupported for type %s", l.Type())
 }
 
 func conv2Float(v GValue) (GVFloat, bool) {

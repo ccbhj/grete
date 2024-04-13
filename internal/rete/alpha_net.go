@@ -17,9 +17,8 @@ type (
 		ID    GVIdentity
 		Value GValue
 
-		tokens       set[*Token]
-		alphaMems    set[*AlphaMem]
-		nJoinResults set[*negativeJoinResult]
+		tokens    set[*Token]
+		alphaMems set[*AlphaMem]
 	}
 )
 
@@ -28,9 +27,8 @@ func NewWME(name GVIdentity, value GValue) *WME {
 		ID:    name,
 		Value: value,
 
-		tokens:       newSet[*Token](),
-		alphaMems:    newSet[*AlphaMem](),
-		nJoinResults: newSet[*negativeJoinResult](),
+		tokens:    newSet[*Token](),
+		alphaMems: newSet[*AlphaMem](),
 	}
 }
 
@@ -104,11 +102,10 @@ func (w *WME) getAttrValue(attr string, raw bool) (any, error) {
 	return ret, nil
 }
 
-// _destory should only be called by an AlphaNetwork, since it manages all the WMEs
+// _destory should only be called by an AlphaNetwork, who manages all the WMEs
 func (w *WME) _destory() {
 	w.clearAlphaMems()
 	w.clearTokens()
-	w.clearNegativeJoinResult()
 }
 
 func (w *WME) clearAlphaMems() {
@@ -122,25 +119,6 @@ func (w *WME) clearTokens() {
 	w.tokens.Clear()
 }
 
-func (w *WME) clearNegativeJoinResult() {
-	if len(w.nJoinResults) == 0 {
-		return
-	}
-	w.nJoinResults.ForEach(func(njr *negativeJoinResult) {
-		owner := njr.owner
-		owner.nJoinResults.Del(njr)
-		if len(owner.nJoinResults) == 0 {
-			// negative cond was previously false but is now true
-			owner.node.ForEachChildNonStop(func(child ReteNode) {
-				if bn, ok := child.(BetaNode); ok {
-					bn.leftActivate(owner, nil)
-				}
-			})
-		}
-	})
-	w.nJoinResults.Clear()
-}
-
 type (
 	alphaMemSuccesor interface {
 		// RightActivate notify there is an new WME added
@@ -150,7 +128,8 @@ type (
 
 	// AlphaMem store those WMEs that passes constant test
 	AlphaMem struct {
-		cond           Cond
+		typeInfo       TypeInfo
+		guards         []Guard
 		inputAlphaNode AlphaNode
 		items          set[*WME]                    // wmes that passed tests of ConstantTestNode
 		successors     *list.List[alphaMemSuccesor] // must be ordered, see Figure 2.5 in paper 2.4
@@ -158,14 +137,10 @@ type (
 	}
 )
 
-func (w *WME) passAllConstantTest(c Cond) bool {
-	return w.HasAttr(string(c.AliasAttr)) &&
-		((c.Value.Type() == GValueTypeIdentity) || c.TestOp.ToFunc()(c.Value, w.Value))
-}
-
-func newAlphaMem(cond Cond, input AlphaNode, an *AlphaNetwork) *AlphaMem {
+func newAlphaMem(typeInfo TypeInfo, guards []Guard, input AlphaNode, an *AlphaNetwork) *AlphaMem {
 	am := &AlphaMem{
-		cond:           cond,
+		typeInfo:       typeInfo,
+		guards:         guards,
 		items:          newSet[*WME](),
 		inputAlphaNode: input,
 		an:             an,
@@ -183,11 +158,7 @@ func (m *AlphaMem) addWME(w *WME) {
 }
 
 func (m *AlphaMem) removeWME(w *WME) {
-	m.items.Add(w)
-	for am := range w.alphaMems {
-		am.items.Del(w)
-		// TODO: try to left unlink the am from join node
-	}
+	m.items.Del(w)
 }
 
 func (m *AlphaMem) NItems() int {
@@ -275,6 +246,9 @@ func (m *AlphaMem) _destory() {
 		if parent != nil {
 			parent.RemoveChild(current)
 		}
+		if tn, ok := current.(*TypeTestNode); ok {
+			delete(m.an.typeNodes, tn.Hash())
+		}
 		current.SetParent(nil)
 		current = parent
 	}
@@ -287,6 +261,7 @@ type AlphaNetwork struct {
 	root          AlphaNode
 	cond2AlphaMem map[uint64]*AlphaMem
 	workingMems   map[uint64]*WME
+	typeNodes     map[uint64]*TypeTestNode
 }
 
 func NewAlphaNetwork() *AlphaNetwork {
@@ -295,6 +270,7 @@ func NewAlphaNetwork() *AlphaNetwork {
 		root:          root,
 		cond2AlphaMem: make(map[uint64]*AlphaMem),
 		workingMems:   make(map[uint64]*WME),
+		typeNodes:     make(map[uint64]*TypeTestNode),
 	}
 	return alphaNet
 }
@@ -369,37 +345,15 @@ func (n *AlphaNetwork) RemoveFact(f Fact) {
 
 func (n *AlphaNetwork) removeWME(sum uint64, w *WME) {
 	delete(n.workingMems, sum)
+	// clear all the alpha memories
 	w.alphaMems.ForEach(func(am *AlphaMem) {
 		am.removeWME(w)
 	})
+	w.alphaMems.Clear()
 	w._destory()
 }
 
-func (n *AlphaNetwork) buildOrShareTestNode(parent AlphaNode, c Cond, makeFn func(*alphaNode, Cond) AlphaNode) AlphaNode {
-	var (
-		child AlphaNode
-		base  = newAlphaNode(parent)
-		an    = makeFn(base, c)
-		h     uint64
-	)
-	if _, ok := an.(sharableAlphaNode); !ok {
-		goto build
-	}
-	h = an.Hash()
-	child = parent.GetChild(h)
-	if child != nil {
-		if shareNode, ok := child.(sharableAlphaNode); ok {
-			shareNode.Adjust(c)
-			return child
-		}
-	}
-
-build:
-	parent.AddChild(an)
-	return an
-}
-
-func (n *AlphaNetwork) buildOrShareNegativeTestNode(c Cond, nn negatableAlphaNode) AlphaNode {
+func (n *AlphaNetwork) buildOrShareNegativeTestNode(c Guard, nn negatableAlphaNode) AlphaNode {
 	negativeNode := nn.GetNegativeNode()
 	if negativeNode != nil {
 		return negativeNode
@@ -411,8 +365,9 @@ func (n *AlphaNetwork) buildOrShareNegativeTestNode(c Cond, nn negatableAlphaNod
 	return newNode
 }
 
-func (n *AlphaNetwork) MakeAlphaMem(c Cond, negative bool) *AlphaMem {
-	h := n.hashCond(c)
+func (n *AlphaNetwork) MakeAlphaMem(aliasType TypeInfo, guards []Guard) *AlphaMem {
+	var err error
+	h := n.hashGuards(aliasType, guards)
 	if am, in := n.cond2AlphaMem[h]; in {
 		return am
 	}
@@ -422,16 +377,57 @@ func (n *AlphaNetwork) MakeAlphaMem(c Cond, negative bool) *AlphaMem {
 	)
 
 	// test type
-	currentNode = n.buildOrShareTestNode(currentNode, c, NewTypeTestNode)
-	if c.Value.Type() != GValueTypeIdentity {
-		currentNode = n.buildOrShareTestNode(currentNode, c, NewConstantTestNode)
-		if negative {
+	th := aliasType.Hash()
+	tn, in := n.typeNodes[th]
+	if in {
+		if currentNode.IsParentOf(tn) {
+			currentNode = tn
+		} else {
+			defer func() {
+				if err != nil {
+					n.root.RemoveChild(tn)
+				}
+			}()
+			currentNode.AddChild(tn)
+			currentNode = tn
+		}
+	} else {
+		tn := NewTypeTestNode(newAlphaNode(currentNode), aliasType)
+		defer func() {
+			if err != nil {
+				n.root.RemoveChild(tn)
+			}
+		}()
+		n.typeNodes[tn.Hash()] = tn.(*TypeTestNode)
+		n.root.AddChild(tn)
+		currentNode = tn
+	}
+	for _, g := range guards {
+		if g.Value.Type() == GValueTypeIdentity {
+			panic("alias as value is not allowed in guard")
+		}
+		base := newAlphaNode(currentNode)
+		newNode := NewConstantTestNode(base, g)
+		if cached := currentNode.GetChild(newNode.Hash()); cached != nil {
+			currentNode = cached
+		} else {
+			parent := currentNode
+			defer func(child, parent AlphaNode) {
+				if err != nil {
+					log.L("fail to build ConvertibleTo: %s", err)
+					parent.RemoveChild(child)
+				}
+			}(newNode, parent)
+			parent.AddChild(newNode)
+			currentNode = newNode
+		}
+		if g.Negative {
 			nnode, ok := currentNode.(negatableAlphaNode)
 			if !ok {
 				// TODO: handle error
 				panic("node not supported negation")
 			}
-			currentNode = n.buildOrShareNegativeTestNode(c, nnode)
+			currentNode = n.buildOrShareNegativeTestNode(g, nnode)
 		}
 	}
 
@@ -439,21 +435,30 @@ func (n *AlphaNetwork) MakeAlphaMem(c Cond, negative bool) *AlphaMem {
 		return am
 	}
 
-	am := newAlphaMem(c, currentNode, n)
+	am := newAlphaMem(aliasType, guards, currentNode, n)
 	currentNode.SetOutputMem(am)
 	n.cond2AlphaMem[h] = am
 	return am
 }
 
 // initialize am with any current working memory
-// TODO: deprecate this function
-func (n *AlphaNetwork) InitAlphaMem(am *AlphaMem, c Cond) {
-	for _, w := range n.workingMems {
-		n.addWME(w.Hash(), w)
+func (n *AlphaNetwork) InitAlphaMem(am *AlphaMem) {
+	node := am.inputAlphaNode
+	// find the top AlphaNode, but not the root, to avoid massive activation as possible as we can
+	for node != nil {
+		if node.Parent() == n.root {
+			break
+		}
+		node = node.Parent()
+	}
+	if node != nil {
+		for _, w := range n.workingMems {
+			n.activateAlphaNode(node, w)
+		}
 	}
 }
 
-func (n *AlphaNetwork) InitDummyAlphaMem(am *AlphaMem, c Cond) {
+func (n *AlphaNetwork) InitDummyAlphaMem(am *AlphaMem, c Guard) {
 	for _, w := range n.workingMems {
 		am.Activate(w)
 	}
@@ -466,23 +471,8 @@ func (n *AlphaNetwork) dummyAlphaNode() *AlphaMem {
 	return nil
 }
 
-func (n *AlphaNetwork) makeDummyAlphaMem() *AlphaMem {
-	// finish building test node
-	if am := n.root.OutputMem(); am != nil {
-		return am
-	}
-
-	am := newAlphaMem(Cond{}, n.root, n)
-	n.root.SetOutputMem(am)
-	// initialize am with any current working memory
-	for _, w := range n.workingMems {
-		am.Activate(w)
-	}
-	return am
-}
-
 func (n *AlphaNetwork) DestoryAlphaMem(alphaMem *AlphaMem) {
-	h := n.hashCond(alphaMem.cond)
+	h := n.hashGuards(alphaMem.typeInfo, alphaMem.guards)
 	if _, in := n.cond2AlphaMem[h]; !in {
 		return
 	}
@@ -490,24 +480,13 @@ func (n *AlphaNetwork) DestoryAlphaMem(alphaMem *AlphaMem) {
 	delete(n.cond2AlphaMem, h)
 }
 
-func (n *AlphaNetwork) hashCond(c Cond) uint64 {
-	// In the paper, the authors propose to use exhaustive-table-lookup to figure out which alpha memory should be used.
-	// The exhaustive-table-lookup combine the id, attribute and value in an condition to lookup in an cache table but all the
-	// value that is not a "constant" value will be treated as an wildcard and got ignored. The author assumed that all the
-	// value in a condition can be a "constant" but I doubt that supporting variables to be attributes or "constant" to be
-	// attribute are necessary. As a result, here I assume that:
-	//   - cond.ID must be TestValueTypeIdentity and we will build TypeTestNode for each alias;
-	//   - cond.Attr must be constant(TVString) and we will test it in TypeTestNode to see if a wme has such an attr.
-	//   - cond.Value might be TestValueTypeIdentity or constant and we will sometimes build ConstantTestNode for it;
-	// see (*AlphaNetwork).MakeAlphaMem for the implementation.
-	// since we will not test Value whose type is TestValueTypeIdentity, we can mask it when hasing conds so that Cond($x, ^On, $y) and Cond($x, ^On, ^z) will be treated as they are the same.
+func (n *AlphaNetwork) hashGuards(typeInfo TypeInfo, guards []Guard) uint64 {
+	ret := typeInfo.Hash()
 
-	var opt uint64
-	if c.Value.Type() == GValueTypeIdentity {
-		opt |= CondHashOptMaskValue
+	for _, g := range guards {
+		ret = mix64(ret, g.Hash())
 	}
-	h := c.Hash(opt)
-	return h
+	return ret
 }
 
 // Alpha test nodes
@@ -531,11 +510,6 @@ type (
 		SetOutputMem(mem *AlphaMem)
 		OutputMem() *AlphaMem
 		ForEachChild(fn func(AlphaNode) (stop bool))
-	}
-
-	sharableAlphaNode interface {
-		AlphaNode
-		Adjust(c Cond)
 	}
 
 	negatableAlphaNode interface {
@@ -609,81 +583,30 @@ func (n *alphaNode) Hash() uint64                   { return 0 }
 func (n *alphaNode) PerformTest(*WME) (bool, error) { return true, nil }
 
 type TypeTestNode struct {
-	*alphaNode       `hash:"ignore"`
-	TypeInfo         *TypeInfo      `hash:"ignore"` // TypeInfo specified in a Cond
-	FieldConstraints map[string]int `hash:"ignore"` // field names we learned from conditions, and its reference count(count of cond)
-	Alias            GVIdentity
+	*alphaNode `hash:"ignore"`
+	TypeInfo   TypeInfo `hash:"ignore"` // TypeInfo specified in a Cond
 }
 
 var _ AlphaNode = (*TypeTestNode)(nil)
 
-func NewTypeTestNode(alphaNode *alphaNode, c Cond) AlphaNode {
-	var (
-		tf               *TypeInfo
-		fieldConstraints map[string]int
-	)
-	if c.AliasType == nil {
-		fieldConstraints = make(map[string]int)
-		if c.AliasAttr != FieldSelf {
-			// must has field c.Attr, but we don't know what type it is
-			// leave it until we perform the test op
-			fieldConstraints = map[string]int{
-				string(c.AliasAttr): 1,
-			}
-		}
-	} else {
-		tf = c.AliasType
-	}
-
+func NewTypeTestNode(alphaNode *alphaNode, tf TypeInfo) AlphaNode {
 	return &TypeTestNode{
-		alphaNode:        alphaNode,
-		TypeInfo:         tf,
-		Alias:            c.Alias,
-		FieldConstraints: fieldConstraints,
+		alphaNode: alphaNode,
+		TypeInfo:  tf,
 	}
-}
-
-func (t *TypeTestNode) Adjust(c Cond) {
-	if c.AliasAttr == FieldSelf || c.AliasType != nil {
-		return
-	}
-	// t.RequiredFields is generated by us, we can add more field constrait here by new Cond
-	t.FieldConstraints[string(c.AliasAttr)] = t.FieldConstraints[string(c.AliasAttr)] + 1
 }
 
 func (t *TypeTestNode) PerformTest(w *WME) (bool, error) {
-	if t.TypeInfo != nil {
-		switch t.TypeInfo.T {
-		case GValueTypeInt, GValueTypeUint,
-			GValueTypeFloat, GValueTypeString:
-			return t.TypeInfo.T == w.Value.Type(), nil
-		case GValueTypeStruct:
-			return w.Value.Type() == GValueTypeStruct && t.checkStructType(w), nil
-		case GValueTypeUnknown:
-			// unknow type ? leave it until we perform the test op
-			return true, nil
-		}
-	} else if len(t.FieldConstraints) > 0 {
-		return w.Value.Type() == GValueTypeStruct && t.checkFieldConstraints(w), nil
+	switch t.TypeInfo.T {
+	case GValueTypeInt, GValueTypeUint,
+		GValueTypeFloat, GValueTypeString:
+		return t.TypeInfo.T == w.Value.Type(), nil
+	case GValueTypeStruct:
+		return w.Value.Type() == GValueTypeStruct && t.checkStructType(w), nil
+	case GValueTypeUnknown:
+		return false, errors.New("invalid TypeInfo, T cannot be GValueTypeUnknown")
 	}
 	return true, nil
-}
-
-func (t *TypeTestNode) checkFieldConstraints(w *WME) bool {
-	v := w.Value.(*GVStruct).V
-	vt := reflect.TypeOf(v)
-	if vt.Kind() == reflect.Ptr {
-		vt = vt.Elem()
-	}
-	// check whether the struct contains fields in tf
-	for f := range t.FieldConstraints {
-		_, in := vt.FieldByName(f)
-		if !in {
-			return false
-		}
-	}
-
-	return true
 }
 
 func (t *TypeTestNode) checkStructType(w *WME) bool {
@@ -721,7 +644,7 @@ func (t *TypeTestNode) checkStructType(w *WME) bool {
 }
 
 func (t *TypeTestNode) Hash() uint64 {
-	return hashAny(t)
+	return t.TypeInfo.Hash()
 }
 
 // ConstantTestNode perform constant test for each WME,
@@ -737,12 +660,12 @@ type ConstantTestNode struct {
 var _ AlphaNode = (*ConstantTestNode)(nil)
 var _ negatableAlphaNode = (*ConstantTestNode)(nil)
 
-func NewConstantTestNode(alphaNode *alphaNode, c Cond) AlphaNode {
+func NewConstantTestNode(alphaNode *alphaNode, g Guard) AlphaNode {
 	return &ConstantTestNode{
 		alphaNode: alphaNode,
-		Field:     string(c.AliasAttr),
-		V:         c.Value,
-		TestOp:    c.TestOp,
+		Field:     string(g.AliasAttr),
+		V:         g.Value,
+		TestOp:    g.TestOp,
 	}
 }
 
@@ -756,10 +679,10 @@ func (n *ConstantTestNode) PerformTest(w *WME) (bool, error) {
 		return false, err
 	}
 	fn := n.TestOp.ToFunc()
-	return fn(n.V, val2test), nil
+	return fn(n.V, val2test)
 }
 
-func (t *ConstantTestNode) Adjust(c Cond) {}
+func (t *ConstantTestNode) Adjust(c Guard) {}
 
 func (t *ConstantTestNode) GetNegativeNode() *NegativeTestNode {
 	return t.negativeNode
@@ -790,7 +713,7 @@ type NegativeTestNode struct {
 
 var _ AlphaNode = (*NegativeTestNode)(nil)
 
-func newNegativeTestNode(alphaNode *alphaNode, c Cond) *NegativeTestNode {
+func newNegativeTestNode(alphaNode *alphaNode, c Guard) *NegativeTestNode {
 	return &NegativeTestNode{
 		alphaNode: alphaNode,
 	}
@@ -804,4 +727,4 @@ func (n *NegativeTestNode) PerformTest(w *WME) (bool, error) {
 	return true, nil
 }
 
-func (t *NegativeTestNode) Adjust(c Cond) {}
+func (t *NegativeTestNode) Adjust(c Guard) {}

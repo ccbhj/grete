@@ -1,13 +1,13 @@
 package rete
 
 import (
-	"fmt"
 	"reflect"
 
-	. "github.com/ccbhj/grete/internal/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
+
+	. "github.com/ccbhj/grete/internal/types"
 )
 
 type Chess struct {
@@ -24,17 +24,20 @@ func getTestFacts() []*Chess {
 		ID:    "B1",
 		Color: "red",
 		On:    &b2,
+		Rank:  1,
 	}
 	b2 = Chess{
 		ID:     "B2",
 		Color:  "blue",
 		LeftOf: &b3,
 		On:     &table,
+		Rank:   2,
 	}
 	b3 = Chess{
 		ID:    "B3",
 		On:    &table,
 		Color: "red",
+		Rank:  3,
 	}
 	table = Chess{
 		ID: "table",
@@ -74,64 +77,25 @@ var _ = Describe("AlphaNet", func() {
 		})
 	})
 
-	Describe("dummy alpha memory", func() {
-		It("can share one dummy memory", func() {
-			dm0 := an.makeDummyAlphaMem()
-			dm1 := an.makeDummyAlphaMem()
-			Expect(dm0).Should(BeIdenticalTo(dm1))
-		})
-
-		It("should pass test for every WME", func() {
-			dm := an.makeDummyAlphaMem()
-			an.AddFact(Fact{
-				ID:    "X",
-				Value: GVString("foo"),
-			})
-			an.AddFact(Fact{
-				ID:    "Y",
-				Value: NewGVNil(),
-			})
-
-			Expect(dm.NItems()).To(BeEquivalentTo(2))
-		})
-	})
-
 	Describe("performing type checking", func() {
 		It("should check the constant TestValueType", func() {
-			Expect(NewTypeTestNode(nil, Cond{
-				Alias:     "X",
-				AliasAttr: FieldSelf,
-				Value:     GVString("foo"),
-				AliasType: &TypeInfo{T: GValueTypeString},
-			}).PerformTest(&WME{ID: "X", Value: GVString("bar")})).Should(BeTrue())
+			Expect(NewTypeTestNode(nil, TypeInfo{T: GValueTypeString}).PerformTest(&WME{ID: "X", Value: GVString("bar")})).Should(BeTrue())
 
-			Expect(NewTypeTestNode(nil, Cond{
-				Alias:     "X",
-				AliasAttr: FieldSelf,
-				Value:     GVString("foo"),
-				AliasType: &TypeInfo{T: GValueTypeString},
-			}).PerformTest(&WME{ID: "X", Value: GVInt(1)})).Should(BeFalse())
+			Expect(NewTypeTestNode(nil, TypeInfo{T: GValueTypeString}).PerformTest(&WME{ID: "X", Value: GVInt(1)})).Should(BeFalse())
 
 		})
 
 		Context("check the value type of TVStruct", func() {
 			It("should check the TestValueType of struct", func() {
-				Expect(NewTypeTestNode(nil, Cond{
-					Alias:     "X",
-					AliasAttr: "On",
-					Value:     NewGVStruct(Chess{}),
+				Expect(NewTypeTestNode(nil, TypeInfo{
+					T: GValueTypeStruct,
 				}).PerformTest(&WME{ID: "X", Value: GVString("")})).Should(BeFalse())
 			})
 
 			It("should check the struct type strictly if reflect.Type is provided ", func() {
-				n := NewTypeTestNode(nil, Cond{
-					Alias:     "X",
-					AliasAttr: "On",
-					Value:     NewGVStruct(Chess{}),
-					AliasType: &TypeInfo{
-						T:  GValueTypeStruct,
-						VT: reflect.TypeOf(Chess{}),
-					},
+				n := NewTypeTestNode(nil, TypeInfo{
+					T:  GValueTypeStruct,
+					VT: reflect.TypeOf(Chess{}),
 				})
 				Expect(n.PerformTest(&WME{ID: "X", Value: GVString("")})).Should(BeFalse())
 				Expect(n.PerformTest(&WME{ID: "X", Value: NewGVStruct(Chess{})})).Should(BeTrue())
@@ -147,15 +111,10 @@ var _ = Describe("AlphaNet", func() {
 			})
 
 			It("could check if value have the required fields", func() {
-				n := NewTypeTestNode(nil, Cond{
-					Alias:     "X",
-					AliasAttr: "On",
-					Value:     GVString("Y"),
-					AliasType: &TypeInfo{
-						T: GValueTypeStruct,
-						Fields: map[string]GValueType{
-							"Color": GValueTypeString,
-						},
+				n := NewTypeTestNode(nil, TypeInfo{
+					T: GValueTypeStruct,
+					Fields: map[string]GValueType{
+						"Color": GValueTypeString,
 					},
 				})
 				Expect(n.PerformTest(&WME{ID: "X", Value: NewGVStruct(struct{ Color GVString }{"red"})})).Should(BeTrue())
@@ -164,107 +123,63 @@ var _ = Describe("AlphaNet", func() {
 				Expect(n.PerformTest(&WME{ID: "X", Value: NewGVStruct(struct{ On string }{"Y"})})).Should(BeFalse())
 			})
 
-			It("could pass the type check for struct having fields required in Cond", func() {
-				n := NewTypeTestNode(nil, Cond{
-					Alias:     "X",
-					AliasAttr: "On",
-					Value:     GVString("Y"),
-					AliasType: nil,
+			It("could check by the reflection type", func() {
+				n := NewTypeTestNode(nil, TypeInfo{
+					T:  GValueTypeStruct,
+					VT: reflect.TypeOf(Chess{}),
 				})
-				Expect(n.PerformTest(&WME{ID: "X", Value: NewGVStruct(struct{ Color string }{"red"})})).Should(BeFalse())
-				Expect(n.PerformTest(&WME{ID: "X", Value: NewGVStruct(struct{ On string }{"Y"})})).Should(BeTrue())
+
+				Expect(n.PerformTest(&WME{ID: "X", Value: NewGVStruct(struct{ Color GVString }{"red"})})).Should(BeFalse())
+				Expect(n.PerformTest(&WME{ID: "X", Value: NewGVStruct(Chess{})})).Should(BeTrue())
 			})
 		})
 	})
 
 	Describe("constructing AlphaNetwork", func() {
+		var tf TypeInfo
+
+		BeforeEach(func() {
+			tf = TypeInfo{
+				T: GValueTypeStruct,
+				Fields: map[string]GValueType{
+					"On":    GValueTypeString,
+					"Color": GValueTypeString,
+				},
+			}
+		})
+
 		It("allowed the same condition to be added for more than one time", func() {
-			am := an.MakeAlphaMem(Cond{
-				Alias:     GVIdentity("x"),
-				AliasAttr: "On",
-				Value:     GVString("y"),
-				TestOp:    TestOpEqual,
-			}, false)
-			Expect(am).NotTo(BeNil())
-			Expect(an.AlphaRoot()).NotTo(BeNil())
-		})
-
-		It("allowed the conditions with same Attr but different Values that are an Identity to generate same AlphaMem", func() {
-			am0 := an.MakeAlphaMem(Cond{
-				Alias:     GVIdentity("x"),
-				AliasAttr: "On",
-				Value:     GVIdentity("y"),
-				TestOp:    TestOpEqual,
-			}, false)
-			Expect(am0).NotTo(BeNil())
-			am1 := an.MakeAlphaMem(Cond{
-				Alias:     GVIdentity("x"),
-				AliasAttr: "On",
-				Value:     GVIdentity("z"),
-				TestOp:    TestOpEqual,
-			}, false)
-			Expect(am1).NotTo(BeNil())
-			Expect(fmt.Sprintf("%p", am0)).To(BeEquivalentTo(fmt.Sprintf("%p", am1)))
-		})
-
-		When("testing condition with value of Identity type", func() {
-			var child AlphaNode
-			var am *AlphaMem
-			var cond Cond
-			BeforeEach(func() {
-				cond = Cond{
-					Alias:     GVIdentity("x"),
-					AliasAttr: "On",
-					Value:     GVIdentity("y"),
-					TestOp:    TestOpEqual,
-				}
-				am = an.MakeAlphaMem(cond, false)
-				an.AlphaRoot().ForEachChild(func(tn AlphaNode) (stop bool) {
-					child = tn
-					return true
-				})
-			})
-
-			It("should only test the Attr of a WME", func() {
-				Expect(child.OutputMem()).To(Equal(am))
-				Expect(child.PerformTest(NewWME("X", GVString("Y")))).To(BeFalse())
-				Expect(child.PerformTest(NewWME("X", NewGVStruct(struct{ Color GVString }{""})))).To(BeFalse())
-				Expect(child.PerformTest(NewWME("X", NewGVStruct(struct{ On GVString }{""})))).To(BeTrue())
-			})
-
-			It("can be shared by other node if if Alias are the same", func() {
-				otherAM := an.MakeAlphaMem(Cond{
-					Alias:     cond.Alias,
+			am := an.MakeAlphaMem(tf, []Guard{
+				{
 					AliasAttr: "Color",
 					Value:     GVString("red"),
 					TestOp:    TestOpEqual,
-				}, false)
-				Expect(otherAM.inputAlphaNode.Parent()).Should(BeIdenticalTo(am.inputAlphaNode))
-				inputNode := am.inputAlphaNode
-				Expect(inputNode.(*TypeTestNode).FieldConstraints).
-					Should(And(HaveKey("Color"), HaveKey("On")))
-
-				otherAM = an.MakeAlphaMem(Cond{
-					// try different alias
-					Alias:     cond.Alias + cond.Alias,
-					AliasAttr: "Color",
-					Value:     NewGVNil(),
-					TestOp:    TestOpEqual,
-				}, false)
-				Expect(otherAM.inputAlphaNode.Parent()).ShouldNot(BeIdenticalTo(am.inputAlphaNode))
+				},
 			})
+			Expect(am).NotTo(BeNil())
+			Expect(an.AlphaRoot()).NotTo(BeNil())
+
+			otherAM := an.MakeAlphaMem(tf, []Guard{
+				{
+					AliasAttr: "Color",
+					Value:     GVString("red"),
+					TestOp:    TestOpEqual,
+				},
+			})
+			Expect(otherAM).Should(BeIdenticalTo(am))
 		})
 
 		When("testing condition with value of non-Identity type as tested Value", func() {
 			var child, grandChild AlphaNode
 			var am *AlphaMem
 			BeforeEach(func() {
-				am = an.MakeAlphaMem(Cond{
-					Alias:     GVIdentity("x"),
-					AliasAttr: "Color",
-					Value:     GVString("red"),
-					TestOp:    TestOpEqual,
-				}, false)
+				am = an.MakeAlphaMem(tf, []Guard{
+					{
+						AliasAttr: "Color",
+						Value:     GVString("red"),
+						TestOp:    TestOpEqual,
+					},
+				})
 
 				an.AlphaRoot().ForEachChild(func(tn AlphaNode) (stop bool) {
 					child = tn
@@ -314,17 +229,16 @@ var _ = Describe("AlphaNet", func() {
 			var (
 				child, grandChild, grandGrandChild AlphaNode
 				am                                 *AlphaMem
-				c                                  Cond
+				c                                  Guard
 			)
 			BeforeEach(func() {
-				c = Cond{
-					Alias:     "X",
+				c = Guard{
 					AliasAttr: "Color",
 					Value:     GVString("red"),
 					Negative:  true,
 					TestOp:    TestOpEqual,
 				}
-				am = an.MakeAlphaMem(c, true)
+				am = an.MakeAlphaMem(tf, []Guard{c})
 				grandGrandChild = am.inputAlphaNode
 				grandChild = grandGrandChild.Parent()
 				child = grandChild.Parent()
@@ -340,45 +254,60 @@ var _ = Describe("AlphaNet", func() {
 			It("can share node with its positive node", func() {
 				pCond := c
 				pCond.Negative = false
-				pAm := an.MakeAlphaMem(pCond, pCond.Negative)
+				pAm := an.MakeAlphaMem(tf, []Guard{pCond})
 				Expect(pAm.inputAlphaNode).To(BeIdenticalTo(grandChild))
 				Expect(pAm.inputAlphaNode.Parent()).To(BeIdenticalTo(child))
 			})
 		})
 	})
 
-	Describe("destructing alpha mem", func() {
+	Describe("deconstructing alpha mem", func() {
 		var (
 			am *AlphaMem
+			tf TypeInfo
 		)
 		BeforeEach(func() {
-			am = an.MakeAlphaMem(Cond{
-				Alias:     "X",
-				AliasAttr: "Color",
-				Value:     GVString("red"),
-				TestOp:    TestOpEqual,
-			}, false)
+			tf = TypeInfo{
+				T: GValueTypeStruct,
+				Fields: map[string]GValueType{
+					"Rank":  GValueTypeInt,
+					"Color": GValueTypeString,
+				},
+			}
+			am = an.MakeAlphaMem(tf, []Guard{
+				{
+					AliasAttr: "Color",
+					Value:     GVString("red"),
+					TestOp:    TestOpEqual,
+				},
+			})
+			lo.ForEach(getTestFacts(), func(item *Chess, _ int) {
+				an.AddFact(Fact{
+					ID:    item.ID,
+					Value: NewGVStruct(item),
+				})
+			})
 		})
 
-		It("can destruct a stand-alone alpha mem", func() {
-			inputNode := am.inputAlphaNode
-			parent := inputNode.Parent()
-			grandParent := inputNode.Parent().Parent()
+		It("can deconstruct a stand-alone alpha mem", func() {
+			constTestNode := am.inputAlphaNode
+			typeNode := constTestNode.Parent()
 
 			an.DestoryAlphaMem(am)
 			Expect(am.an).Should(BeNil())
 			Expect(am.inputAlphaNode).Should(BeNil())
-			Expect(parent.IsParentOf(inputNode)).Should(BeFalse())
-			Expect(grandParent.IsParentOf(parent)).Should(BeFalse())
+			Expect(typeNode.IsParentOf(constTestNode)).Should(BeFalse())
+			Expect(am.NItems()).Should(BeZero())
 		})
 
-		It("however won't destruct a share construct node", func() {
-			newAM := an.MakeAlphaMem(Cond{
-				Alias:     "X", // alias must be the same to share the type check node
-				AliasAttr: "Color",
-				Value:     GVString("blue"),
-				TestOp:    TestOpEqual,
-			}, false)
+		It("however won't deconstruct a share construct node", func() {
+			newAM := an.MakeAlphaMem(tf, []Guard{
+				{
+					AliasAttr: "Color",
+					Value:     GVString("blue"),
+					TestOp:    TestOpEqual,
+				},
+			})
 			inputNode := am.inputAlphaNode
 			parent := inputNode.Parent()
 			grandParent := inputNode.Parent().Parent()
@@ -401,27 +330,46 @@ var _ = Describe("AlphaNet", func() {
 			Expect(newGrandParent.IsParentOf(newParent)).Should(BeTrue())
 			Expect(grandParent.IsParentOf(parent)).Should(BeTrue())
 		})
+
+		It("can destruct negative node without destructing the positive node", func() {
+			negativeAm := an.MakeAlphaMem(tf, []Guard{
+				{
+					AliasAttr: "Color",
+					Value:     GVString("red"),
+					TestOp:    TestOpEqual,
+					Negative:  true,
+				},
+			})
+			n := am.NItems()
+			Expect(n).ShouldNot(BeZero())
+			an.DestoryAlphaMem(negativeAm)
+			Expect(am.NItems()).Should(Equal(n))
+		})
 	})
 
 	Describe("Adding fact", func() {
 		var (
 			testFacts []*Chess
 			ams       []*AlphaMem
-			conds     = []Cond{
-				{
-					Alias:     GVIdentity("x"),
-					AliasAttr: "On",
-					Value:     GVIdentity("y"),
-					TestOp:    TestOpEqual,
+			fieldType = TypeInfo{
+				T: GValueTypeStruct,
+				Fields: map[string]GValueType{
+					"Rank":  GValueTypeInt,
+					"Color": GValueTypeString,
 				},
+			}
+			conds = []Guard{
 				{
-					Alias:     GVIdentity("x"),
 					AliasAttr: "Color",
 					Value:     GVString("red"),
 					TestOp:    TestOpEqual,
 				},
 				{
-					Alias:     GVIdentity("x"),
+					AliasAttr: "Rank",
+					Value:     GVInt(10),
+					TestOp:    TestOpEqual,
+				},
+				{
 					AliasAttr: "Color",
 					Value:     GVString(""),
 					TestOp:    TestOpEqual,
@@ -433,7 +381,7 @@ var _ = Describe("AlphaNet", func() {
 		BeforeEach(func() {
 			ams = make([]*AlphaMem, 0, len(conds))
 			for _, c := range conds {
-				am := an.MakeAlphaMem(c, c.Negative)
+				am := an.MakeAlphaMem(fieldType, []Guard{c})
 				Expect(am).NotTo(BeNil())
 				ams = append(ams, am)
 			}
@@ -448,55 +396,11 @@ var _ = Describe("AlphaNet", func() {
 			testFacts = testFacts[:0]
 		})
 
-		When("performing type checking", func() {
-			It("any item in testFacts has the matched type", func() {
-				typeAM := ams[0]
-				Expect(typeAM.NItems()).To(BeEquivalentTo(len(testFacts)))
-				typeAM.ForEachItem(func(w *WME) (stop bool) {
-					Expect(testFacts).To(ContainElement(w.Value.(*GVStruct).Value()))
-					return false
-				})
-			})
-
-			It("should not match any fact with different TestValueType", func() {
-				typeAM := ams[0]
-				an.AddFact(Fact{
-					ID:    "B4",
-					Value: GVString("string"),
-				})
-				Expect(typeAM.NItems()).To(BeEquivalentTo(len(testFacts)))
-			})
-
-			It("should not match any fact with type missing field 'On' or 'Color' ", func() {
-				typeAM := ams[0]
-				an.AddFact(Fact{
-					ID: "B5",
-					Value: NewGVStruct(struct {
-						LeftOf GVIdentity
-					}{"B3"}),
-				})
-				Expect(typeAM.NItems()).To(BeEquivalentTo(len(testFacts)))
-			})
-
-			It("should match any fact with differen struct type but has field 'On' or 'Color' ", func() {
-				typeAM := ams[0]
-				type Foo struct {
-					On    GVString
-					Color GVString
-				}
-				an.AddFact(Fact{
-					ID:    "B6",
-					Value: NewGVStruct(Foo{"B4", "black"}),
-				})
-				Expect(typeAM.NItems()).To(BeEquivalentTo(1 + len(testFacts)))
-			})
-		})
-
-		It("should matched Facts with contant value", func() {
+		It("should matched Facts with contant value and type", func() {
 			redFacts := lo.Filter(testFacts, func(f *Chess, idx int) bool {
 				return f.Color == "red"
 			})
-			am := ams[1]
+			am := ams[0]
 			Expect(redFacts).To(HaveLen(am.NItems()))
 			am.ForEachItem(func(w *WME) (stop bool) {
 				Expect(redFacts).To(ContainElement(w.Value.(*GVStruct).Value()))
@@ -513,7 +417,7 @@ var _ = Describe("AlphaNet", func() {
 
 				pc := conds[2]
 				pc.Negative = false
-				positiveAM = an.MakeAlphaMem(pc, false)
+				positiveAM = an.MakeAlphaMem(fieldType, []Guard{pc})
 				lo.ForEach(testFacts, func(item *Chess, _ int) {
 					an.AddFact(Fact{ID: GVIdentity(item.ID), Value: NewGVStruct(item)})
 				})
@@ -531,18 +435,22 @@ var _ = Describe("AlphaNet", func() {
 			testChess []*Chess
 			testFacts []Fact
 			ams       []*AlphaMem
-			conds     = []Cond{
+			conds     = []Guard{
 				{
-					Alias:     GVIdentity("x"),
-					AliasAttr: "On",
-					Value:     GVIdentity("y"),
+					AliasAttr: "Color",
+					Value:     GVString("blue"),
 					TestOp:    TestOpEqual,
 				},
 				{
-					Alias:     GVIdentity("x"),
 					AliasAttr: "Color",
 					Value:     GVString("red"),
 					TestOp:    TestOpEqual,
+				},
+			}
+			tf = TypeInfo{
+				T: GValueTypeStruct,
+				Fields: map[string]GValueType{
+					"Color": GValueTypeString,
 				},
 			}
 		)
@@ -550,7 +458,7 @@ var _ = Describe("AlphaNet", func() {
 		BeforeEach(func() {
 			ams = make([]*AlphaMem, 0, len(conds))
 			for _, c := range conds {
-				am := an.MakeAlphaMem(c, false)
+				am := an.MakeAlphaMem(tf, []Guard{c})
 				Expect(am).NotTo(BeNil())
 				ams = append(ams, am)
 			}

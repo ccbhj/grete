@@ -9,10 +9,9 @@ import (
 )
 
 var _ = Describe("Cond", func() {
-	var cond *Cond
+	var cond *Guard
 	BeforeEach(func() {
-		cond = &Cond{
-			Alias:     "Foo",
+		cond = &Guard{
 			AliasAttr: "field",
 			Value:     GVString("bar"),
 			Negative:  false,
@@ -21,33 +20,22 @@ var _ = Describe("Cond", func() {
 	})
 
 	It("can generate hash by Attr/Value at lowest 32 bit", func() {
-		hash := cond.Hash(0)
+		hash := cond.Hash()
 		Expect(hash).NotTo(BeZero())
 		Expect(hash).Should(BeNumerically(">", 0))
 	})
 
 	It("can set highest bit for Negative condition", func() {
 		cond.Negative = true
-		hash := cond.Hash(0)
+		hash := cond.Hash()
 		Expect(hash).NotTo(BeZero())
 		Expect(int(hash)).Should(BeNumerically("<", 0))
 	})
 
 	It("can generate same hash for other Conds with same Attr and same value", func() {
-		opt := CondHashOptMaskID
-		hash := cond.Hash(opt)
+		hash := cond.Hash()
 		otherCond := cond
-		otherCond.Alias = "Bar"
 		Expect(otherCond).NotTo(BeZero())
-		Expect(hash).Should(BeEquivalentTo(otherCond.Hash(opt)))
-	})
-
-	It("can generate same hash for other Conds with same Attr if Value is an Identity", func() {
-		opt := CondHashOptMaskValue
-		hash := cond.Hash(opt)
-		otherCond := cond
-		otherCond.Value = GVIdentity("X")
-		Expect(otherCond).NotTo(BeZero())
-		Expect(hash).Should(BeEquivalentTo(otherCond.Hash(opt)))
+		Expect(hash).Should(BeEquivalentTo(otherCond.Hash()))
 	})
 })

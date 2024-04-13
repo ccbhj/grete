@@ -4,6 +4,7 @@ import (
 	"reflect"
 
 	"github.com/dolthub/maphash"
+	"github.com/mitchellh/hashstructure/v2"
 	"github.com/pkg/errors"
 )
 
@@ -199,6 +200,14 @@ type TypeInfo struct {
 	T      GValueType
 	Fields map[string]GValueType
 	VT     reflect.Type
+}
+
+func (v TypeInfo) Hash() uint64 {
+	ret, err := hashstructure.Hash(v, hashstructure.FormatV2, nil)
+	if err != nil {
+		panic(err)
+	}
+	return ret
 }
 
 type GVStruct struct {

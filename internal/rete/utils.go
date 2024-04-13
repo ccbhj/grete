@@ -5,16 +5,25 @@ import (
 	"hash/fnv"
 	"math/bits"
 
-	. "github.com/ccbhj/grete/internal/types"
 	H "github.com/mitchellh/hashstructure/v2"
 	"github.com/pkg/errors"
 	"github.com/zyedidia/generic/list"
+
+	. "github.com/ccbhj/grete/internal/types"
 )
 
 type set[T comparable] map[T]struct{}
 
 func newSet[T comparable]() set[T] {
 	return make(set[T])
+}
+
+func setFrom[T comparable](keys ...T) set[T] {
+	s := newSet[T]()
+	for _, k := range keys {
+		s.Add(k)
+	}
+	return s
 }
 
 func (s set[T]) Add(t T) {
