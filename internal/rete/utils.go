@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"math/bits"
 
+	. "github.com/ccbhj/grete/internal/types"
 	H "github.com/mitchellh/hashstructure/v2"
 	"github.com/pkg/errors"
 	"github.com/zyedidia/generic/list"
@@ -83,8 +84,8 @@ func listToSlice[T any](l *list.List[T]) []T {
 	return arr
 }
 
-func isIdentity(tv TestValue) bool {
-	return tv.Type() == TestValueTypeIdentity
+func isIdentity(tv GValue) bool {
+	return tv.Type() == GValueTypeIdentity
 }
 
 func hashAny(v any) uint64 {

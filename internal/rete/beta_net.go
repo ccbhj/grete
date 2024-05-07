@@ -7,6 +7,7 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/ccbhj/grete/internal/log"
+	. "github.com/ccbhj/grete/internal/types"
 )
 
 type (
@@ -22,7 +23,8 @@ type (
 		// Owner *Token // on tokens in NCC partner: token in whose nccResult this result reside
 	}
 
-	TokenMemory interface {
+	// tokenMemory store tokens
+	tokenMemory interface {
 		ReteNode
 		removeToken(*Token)
 	}
@@ -87,7 +89,7 @@ func (t *Token) toWMEs() []*WME {
 }
 
 func (t *Token) toWMEIDs() []string {
-	return lo.Map(t.toWMEs(), func(item *WME, index int) string { return string(item.ID) })
+	return lo.Map(t.toWMEs(), func(item *WME, index int) string { return "\"" + string(item.ID) + "\"" })
 }
 
 func (t *Token) String() string {
@@ -101,6 +103,7 @@ func (t *Token) destoryDescendents() {
 	clear(t.children)
 }
 
+// destory token's children and wmes
 func (t *Token) destory() {
 	// clean children
 	t.destoryDescendents()
@@ -109,7 +112,7 @@ func (t *Token) destory() {
 
 	// remove token from TokenMemory
 	node := t.node
-	if tm, ok := node.(TokenMemory); ok {
+	if tm, ok := node.(tokenMemory); ok {
 		tm.removeToken(t)
 		// TODO: try right unlink here
 	}
@@ -138,7 +141,7 @@ type (
 	}
 )
 
-var _ TokenMemory = (*BetaMem)(nil)
+var _ tokenMemory = (*BetaMem)(nil)
 var _ BetaNode = (*BetaMem)(nil)
 
 func (bm *BetaMem) removeToken(token *Token) {
@@ -181,13 +184,13 @@ func (bm *BetaMem) detach() {
 
 func (bm *BetaMem) leftActivate(token *Token, wme *WME) int {
 	// a new match found, restore it
-	newToken := newToken(bm, token, wme)
-	bm.items.Add(newToken)
+	newTk := newToken(bm, token, wme)
+	bm.items.Add(newTk)
 
 	ret := 0
 	bm.ForEachChild(func(child ReteNode) (stop bool) {
 		if bn, ok := child.(BetaNode); ok {
-			ret += bn.leftActivate(newToken, wme)
+			ret += bn.leftActivate(newTk, wme)
 		}
 		return false
 	})
@@ -225,18 +228,18 @@ func (t TestAtJoinNode) Hash() uint64 {
 	return hashAny(t)
 }
 
-func (t TestAtJoinNode) performTest(x, y *WME) bool {
+func (t TestAtJoinNode) performTest(x, y *WME) (bool, error) {
 	xv, err := x.GetAttrValue(t.LhsAttr)
 	if err != nil {
 		log.L("fail to get %s of X: %s", t.LhsAttr, err)
-		return false
+		return false, err
 	}
 	log.BugOn(xv != nil, "attr %s of X must not be nil", t.LhsAttr)
 
 	yv, err := y.GetAttrValue(t.RhsAttr)
 	if err != nil {
 		log.L("fail to get %s of Y: %s", t.RhsAttr, err)
-		return false
+		return false, err
 	}
 	log.BugOn(yv != nil, "attr %s of Y must not be nil", t.RhsAttr)
 
@@ -247,48 +250,20 @@ func (t TestAtJoinNode) performTest(x, y *WME) bool {
 	return testFn(xv, yv)
 }
 
-func buildJoinTestFromConds(c Cond, prevConds []Cond) []*TestAtJoinNode {
-	ret := make([]*TestAtJoinNode, 0, 2)
-	id, val := c.Alias, c.Value
-	// each condition will mapped to a token
-	for i := len(prevConds) - 1; i >= 0; i-- {
-		addNode := func(lhs, rhs string, testOp TestOp, ro bool) {
-			offset := len(prevConds) - i - 1
-			ret = append(ret, &TestAtJoinNode{
-				LhsAttr:      lhs,
-				RhsAttr:      rhs,
-				CondOffRhs:   offset,
-				TestOp:       testOp,
-				ReverseOrder: ro,
-			})
-		}
-		prevCond := prevConds[i]
-
-		if prevCond.Alias == id {
-			// JT(ID, ID)
-			addNode(FieldID, FieldID, TestOpEqual, false)
-		}
-		if prevCond.Value.Type() == TestValueTypeIdentity && prevCond.Value == id {
-			// JT(ID, Value) -> JT(Self, Value)
-			// When performing test between ID and Value, we should use FieldSelf instead of FieldID,
-			// Attention: the lhs and rhs order must be reversed here
-			addNode(FieldSelf, string(prevCond.AliasAttr), prevCond.TestOp, true)
-		}
-
-		if isIdentity(val) {
-			switch {
-			case prevCond.Alias == val:
-				// JT(Value, ID)
-				// When performing test between ID and Value, we should use FieldSelf instead of FieldID
-				addNode(string(c.AliasAttr), FieldSelf, c.TestOp, false)
-			case isIdentity(prevCond.Value) && prevCond.Value == val:
-				// JT(Value, Value)
-				addNode(string(c.AliasAttr), string(prevCond.AliasAttr), TestOpEqual, false)
-			}
-		}
+func buildJoinTestFromConds(thisAlias GVIdentity, jt JoinTest, bmOffset map[GVIdentity]int, nbm int) *TestAtJoinNode {
+	offset, in := bmOffset[jt.Y.Alias]
+	if !in {
+		// "TODO: handle error"
+		log.BugOn(true, "usage of undefined alias, jt=%+v", jt)
 	}
-
-	return ret
+	jn := &TestAtJoinNode{
+		LhsAttr:      string(jt.XAttr),
+		RhsAttr:      string(jt.Y.AliasAttr),
+		CondOffRhs:   nbm - offset - 1,
+		TestOp:       jt.TestOp,
+		ReverseOrder: false,
+	}
+	return jn
 }
 
 var _ BetaNode = (*JoinNode)(nil)
@@ -325,7 +300,13 @@ func performTests(tests []*TestAtJoinNode, tk *Token, wme *WME) bool {
 		}
 		log.BugOn(p != nil, "p must never be nil")
 		lhs, rhs := wme, p.wme
-		if !test.performTest(lhs, rhs) {
+		ok, err := test.performTest(lhs, rhs)
+		if err != nil {
+			// TODO: handle error
+			log.L("fail to perform test, test=%+v", test)
+			return false
+		}
+		if !ok {
 			return false
 		}
 	}
@@ -338,12 +319,6 @@ func (n *JoinNode) rightActivate(w *WME) int {
 		bm  = n.Parent().(*BetaMem)
 		ret = 0
 	)
-
-	// just become nonempty
-	// am  := n.amem
-	// if items := am.items; !isListEmpty(items) && items.Front == am.items.Back {
-	// relink to AlphaMem
-	// }
 
 	for tk := range bm.items {
 		if tk.wme == nil || // tk is a dummy token, let it pass(see papar page 25)
@@ -405,18 +380,20 @@ type (
 	// PNode, aka production node, store all the tokens that match the lhs(conditions)
 	PNode struct {
 		ReteNode
-		items set[*Token]
-		lhs   []Cond
+		items     set[*Token]
+		aliasInfo []AliasDeclaration
+		lastBMOff map[GVIdentity]int
 	}
 )
 
-var _ TokenMemory = (*PNode)(nil)
+var _ tokenMemory = (*PNode)(nil)
 var _ BetaNode = (*PNode)(nil)
 
-func NewPNode(parent ReteNode, lhs []Cond) *PNode {
+func NewPNode(parent ReteNode, aliasDecls []AliasDeclaration, lastBMOff map[GVIdentity]int) *PNode {
 	pn := &PNode{
-		items: newSet[*Token](),
-		lhs:   lhs,
+		items:     newSet[*Token](),
+		aliasInfo: aliasDecls,
+		lastBMOff: lastBMOff,
 	}
 
 	pn.ReteNode = NewReteNode(parent, pn)
@@ -443,42 +420,15 @@ func (pn *PNode) AnyMatches() bool {
 }
 
 // Matches figure out what the value of the aliases in each match
-func (pn *PNode) Matches() ([]map[TVIdentity]any, error) {
-	matches := make([]map[TVIdentity]any, 0, len(pn.items))
+func (pn *PNode) Matches() ([]map[GVIdentity]any, error) {
+	matches := make([]map[GVIdentity]any, 0, len(pn.items))
 	for item := range pn.items {
 		log.BugOn(item.nJoinResults.Len() == 0, "item %s has join result => %+v", item, item.nJoinResults)
-		match := make(map[TVIdentity]any, len(pn.lhs))
-		stk := make([]*WME, 0, item.level)
-		// collect all the wme of the token
-		for root := item; root != nil && root.level > 0; root = root.parent {
-			// PNode might add an token with wme == nil
-			if root.wme == nil {
-				continue
-			}
-			stk = append(stk, root.wme)
-		}
-		j := len(stk) - 1
-		for i := 0; i < len(pn.lhs) && j >= 0; i++ {
-			c, wme := pn.lhs[i], stk[j]
-			negativeJoinNode := c.Negative && c.Value.Type() == TestValueTypeIdentity
-			if negativeJoinNode {
-				continue
-			}
-			_, in := match[c.Alias]
-			if !in {
-				match[c.Alias] = unwrapTestValue(wme.Value)
-			}
-			if c.Value.Type() == TestValueTypeIdentity && !mapContains(match, c.Value.(TVIdentity)) {
-				valueID := c.Value.(TVIdentity)
-				v, err := wme.GetAttrValueRaw(string(c.AliasAttr))
-				if err == nil {
-					match[valueID] = unwrapTestValue(v)
-				} else {
-					// TODO: handle error
-					return nil, errors.WithMessagef(err, "fail to GetAttrValue(%s) of WME(%v)", c.AliasAttr, wme.Value)
-				}
-			}
-			j--
+		match := make(map[GVIdentity]any, len(pn.aliasInfo))
+		wmes := item.toWMEs()
+		for alias, off := range pn.lastBMOff {
+			w := wmes[off]
+			match[alias] = UnwrapTestValue(w.Value)
 		}
 
 		matches = append(matches, match)
@@ -514,7 +464,7 @@ type (
 )
 
 var _ BetaNode = (*NegativeNode)(nil)
-var _ TokenMemory = (*NegativeNode)(nil)
+var _ tokenMemory = (*NegativeNode)(nil)
 
 func newNegativeNode(bn *BetaNetwork, parent ReteNode, amem *AlphaMem,
 	tests []*TestAtJoinNode) *NegativeNode {
@@ -639,41 +589,63 @@ func NewBetaNetwork(an *AlphaNetwork) *BetaNetwork {
 	}
 }
 
-func (bn *BetaNetwork) buildOrShareNetwork(parent ReteNode, conds []Cond, earlierConds []Cond) ReteNode {
+func (bn *BetaNetwork) buildOrShareNetwork(parent ReteNode, aliasDecls []AliasDeclaration) *PNode {
 	var (
-		currentNode   ReteNode
-		condsHigherUp []Cond
+		currentNode ReteNode
+		aliasOrders = make(map[GVIdentity]int, len(aliasDecls))
+		ams         = make(map[GVIdentity]*AlphaMem, len(aliasDecls))
+		lastBMOff   = make(map[GVIdentity]int, len(aliasDecls))
+		nbm         = 0
 	)
 
 	currentNode = parent
-	condsHigherUp = earlierConds
-	for _, c := range conds {
-		var (
-			negativeAM, negativeJoinNode bool
-		)
-		if c.Negative {
-			negativeAM = c.Value.Type() != TestValueTypeIdentity
-			negativeJoinNode = !negativeAM
-		}
+	// build alpha memory for each object
+	for i, decl := range aliasDecls {
+		am := bn.an.MakeAlphaMem(decl.Type, decl.Guards)
+		ams[decl.Alias] = am
 
-		if !negativeJoinNode {
-			currentNode = bn.buildOrShareBetaMem(currentNode)
-			currentNode = bn.buildOrShareJoinNode(currentNode,
-				bn.an.MakeAlphaMem(c, negativeAM),
-				buildJoinTestFromConds(c, condsHigherUp))
-		} else {
-			currentNode = bn.buildOrShareNegativeNode(currentNode,
-				bn.an.MakeAlphaMem(c, negativeAM),
-				buildJoinTestFromConds(c, condsHigherUp))
-		}
-		condsHigherUp = append(condsHigherUp, c)
+		bn.an.InitAlphaMem(am)
+		aliasOrders[decl.Alias] = i
 	}
 
-	return currentNode
+	// build join node for each join test
+	for _, decl := range aliasDecls {
+		am, ok := ams[decl.Alias]
+		if !ok {
+			// handle error here
+			panic("undefined alias")
+		}
+		if len(decl.JoinTests) == 0 {
+			// build an dummy join node if no join test is required
+			currentNode = bn.buildOrShareBetaMem(currentNode)
+			currentNode = bn.buildOrShareJoinNode(currentNode, am, nil)
+			lastBMOff[decl.Alias] = nbm
+			nbm++
+		} else {
+			// build join node for each join test
+			for _, jt := range decl.JoinTests {
+				jn := buildJoinTestFromConds(decl.Alias, jt, aliasOrders, nbm)
+				currentNode = bn.buildOrShareBetaMem(currentNode)
+				currentNode = bn.buildOrShareJoinNode(currentNode, am, []*TestAtJoinNode{jn})
+				nbm++
+			}
+		}
+
+		for _, jt := range decl.NJoinTest {
+			jn := buildJoinTestFromConds(decl.Alias, jt, aliasOrders, nbm)
+			currentNode = bn.buildOrShareNegativeNode(currentNode, am, []*TestAtJoinNode{jn})
+			// negative join test don't produce new token
+		}
+
+		lastBMOff[decl.Alias] = nbm - 1
+	}
+
+	pn := NewPNode(currentNode, aliasDecls, lastBMOff)
+	return pn
 }
 
-func isCondNeedNegativeJoin(c Cond) bool {
-	return c.Negative && c.Value.Type() == TestValueTypeIdentity
+func isCondNeedNegativeJoin(c Guard) bool {
+	return c.Negative && c.Value.Type() == GValueTypeIdentity
 }
 
 func (bn *BetaNetwork) buildOrShareJoinNode(parent ReteNode, am *AlphaMem, tests []*TestAtJoinNode) *JoinNode {
@@ -813,18 +785,33 @@ func (bn *BetaNetwork) RemoveFact(fact Fact) {
 	bn.an.RemoveFact(fact)
 }
 
+type AliasDeclaration struct {
+	Alias     GVIdentity
+	Type      TypeInfo
+	Guards    []Guard    // constant test on this alias
+	JoinTests []JoinTest // join test on this alias and others
+	NJoinTest []JoinTest // negative join
+}
+
+type Production struct {
+	ID   string
+	When []AliasDeclaration
+	Then any // TODO: define and handle rhs
+}
+
 // AddProduction add an production and register its unique id
-func (bn *BetaNetwork) AddProduction(id string, lhs ...Cond) *PNode {
-	if len(lhs) == 0 {
-		panic("need some condition")
+func (bn *BetaNetwork) AddProduction(p Production) *PNode {
+	aliasDecls := p.When
+	if len(aliasDecls) == 0 {
+		panic("need some guards")
 	}
 
+	id := p.ID
 	if pn, in := bn.productions[id]; in {
 		return pn
 	}
 
-	currentNode := bn.buildOrShareNetwork(bn.topNode, lhs, nil)
-	pn := NewPNode(currentNode, lhs)
+	pn := bn.buildOrShareNetwork(bn.topNode, aliasDecls)
 	bn.updateNewNodeWithMatchesFromAbove(pn)
 	bn.productions[id] = pn
 	return pn
