@@ -11,6 +11,7 @@ import (
 )
 
 type (
+	// Token stores WMEs that match guards or join test
 	Token struct {
 		parent *Token
 		level  int

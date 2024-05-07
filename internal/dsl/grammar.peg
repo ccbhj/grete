@@ -1,0 +1,109 @@
+package dsl
+
+type PRD Peg {
+}
+
+Definitions      <-         Definition+ EOT
+
+Definition       <-         LPAR DefType Identifier? OptionList? DefinitionBody RPAR
+                            / LBRK DefType Identifier? OptionList? DefinitionBody RBRK
+
+DefinitionBody   <-         Definition 
+                             / LPAR Definition+  RPAR
+                             / LBRK Definition+  RBRK
+                             / Expression
+                             / LPAR Expression+ RPAR
+                             / LBRK Expression+  RBRK
+                             / Literal
+                             / Identifier
+
+Option           <-         '#:' Identifier (Literal/Identifier) Spacing
+
+OptionList       <-         Option+
+
+Expression       <-         LPAR Operator Operand*  RPAR
+                            /  LBRK Operator Operand*  RBRK
+
+Operator         <-         Identifier Spacing
+
+Operand          <-         (Expression
+                             / Literal
+                             / Identifier
+                            ) Spacing
+
+#-------------------------------------------------------------------------
+# Lexical elements
+#-------------------------------------------------------------------------
+Spacing          <-        ( [ \t\r\n]+
+                             / ';' (![\r\n] .)* [\r\n]
+                           )*
+
+Identifier       <-        !Keyword Letter LetterOrDigit* Spacing? #{}
+
+
+#-------------------------------------------------------------------------
+# Literals
+#-------------------------------------------------------------------------
+
+Literal                <-               ( FloatLiteral
+                                          / IntegerLiteral          # May be a prefix of FloatLiteral
+                                          / StringLiteral
+                                          / BoolLiteral
+                                        ) 
+
+BoolLiteral            <-               ('#f' / '#t') !LetterOrDigit 
+
+FloatLiteral           <-               [+\-]? (Digits '.' Digits?  Exponent?
+                                                /  Digits Exponent
+                                                / '.' Digits Exponent?)
+
+Exponent               <-               [eE] [+\-]? Digits
+
+IntegerLiteral         <-               [-]? DecimalNumeral [uUfF]?
+
+DecimalNumeral         <-               '0' / [1-9] ([_]* [0-9])*
+
+StringLiteral          <-               ["] StringChar* ["]
+
+StringChar             <-               Escape / ![\"\n\\] .
+
+LetterOrDigit          <-               [a-z] / [A-Z] / [0-9] / [_]
+
+Letter                 <-               [a-z] / [A-Z] / [_]
+
+Digits                 <-               [0-9]([_]*[0-9])*
+
+Escape                 <-               '\\' [btnfr"'\\] 
+
+#-------------------------------------------------------------------------
+# Keywords
+#-------------------------------------------------------------------------
+Keyword                <-            ('define-prdt'
+                                      / 'define-lhs'
+                                      / 'define-rhs'
+                                      / 'rule'
+                                      / 'define'        # must be the last one to match
+                                      ) !LetterOrDigit
+
+DefType                <-            ('define-prdt'
+                                      / 'define-lhs'
+                                      / 'define-rhs'
+                                      / 'rule'
+                                      / 'define'        # must be the last one to match
+                                      ) !LetterOrDigit Spacing
+
+
+
+#-------------------------------------------------------------------------
+# Punctuators
+#-------------------------------------------------------------------------
+
+LPAR      <-  Spacing        '('         Spacing
+
+RPAR      <-  Spacing        ')'         Spacing
+
+LBRK      <-  Spacing        '['         Spacing
+
+RBRK      <-  Spacing        ']'         Spacing
+
+EOT       <-  !.

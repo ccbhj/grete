@@ -17,6 +17,14 @@ func newSet[T comparable]() set[T] {
 	return make(set[T])
 }
 
+func setFrom[T comparable](keys ...T) set[T] {
+	s := newSet[T]()
+	for _, k := range keys {
+		s.Add(k)
+	}
+	return s
+}
+
 func (s set[T]) Add(t T) {
 	s[t] = struct{}{}
 }
