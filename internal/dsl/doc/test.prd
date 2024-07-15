@@ -1,14 +1,10 @@
-(define-prdt testing_prdt (
-     (when (
-            [eq (field-of $x "Color") 10]
-            [eq (field-of $TABLE "Color") ""])
-     )
-     (match (
-            [not-eq (field-of $x "On") $TABLE]
-            [> (field-of $x "Rank") 10])
-     )
-     (then (
-            [emit "match_found" x])
-     )
-   )
+(rule
+  #:name "example rule"
+  #:desc "find the prime number between 1-100"
+  (when 
+    (addr is-struct (eq @addressLine1 "nowhere"))
+    (person is-struct (eq @name "Salaboy") )
+  )
+  (then
+   (logf "Hey I just find %s that lives in %s" $person $addr))
 )

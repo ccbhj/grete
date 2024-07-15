@@ -41,13 +41,13 @@ const (
 )
 
 var gValueTypeDict = [...]string{
-	"Unknown", "Nil", "ID", "Int", "Uint", "Float", "String", "Bool",
+	"Unknown", "Nil", "ID", "Int", "Uint", "Float", "String", "Struct", "Bool",
 }
 
 var gValueTypeRTypeDict = [...]reflect.Type{
 	nil, reflect.TypeOf(&GVNil{}), reflect.TypeOf(GVIdentity("")), reflect.TypeOf(GVInt(0)),
 	reflect.TypeOf(GVUint(0)), reflect.TypeOf(GVFloat(0)),
-	reflect.TypeOf(GVString("")), reflect.TypeOf(GVBool(false)),
+	reflect.TypeOf(GVString("")), reflect.TypeOf(GVStruct{}), reflect.TypeOf(GVBool(false)),
 }
 
 func (t GValueType) String() string {
@@ -220,9 +220,9 @@ func (v *GVNil) ToGoValue() any { return nil }
 
 // type info of an Alias
 type TypeInfo struct {
-	T      GValueType
-	Fields map[string]GValueType
 	VT     reflect.Type
+	Fields map[string]GValueType
+	T      GValueType
 }
 
 func (v TypeInfo) Hash() uint64 {

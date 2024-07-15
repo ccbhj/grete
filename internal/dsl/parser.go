@@ -1,359 +1,235 @@
 package dsl
 
 import (
-	"fmt"
-	"strconv"
-	"strings"
-
+	"github.com/ccbhj/gendsl"
 	"github.com/pkg/errors"
+
+	"github.com/ccbhj/grete"
+	"github.com/ccbhj/grete/internal/rete"
+	"github.com/ccbhj/grete/internal/types"
 )
 
-type ParseContext struct {
-	p   *PRD
-	env map[string]any
-}
+var globalEnv = gendsl.NewEnv().WithProcedure("define-prdt", gendsl.Procedure{Eval: _production})
 
-type (
-	OptionList map[string]any
+var definePrdtEnv = gendsl.NewEnv().WithProcedure("when", gendsl.Procedure{Eval: _when})
 
-	Definition struct {
-		DefType string
-		ID      string
-		Options OptionList
-		Body    []any
+type productionOpt func(*grete.Production) error
+
+// Example:
+//
+//	  (define-prdt ExampleRule
+//		  #:desc "find the prime number between 1-100"
+//		  (when
+//		    (for-struct addr (eq @addressLine1 "nowhere"))
+//		    (for-struct is-struct (eq @name "Salaboy") )
+//		  )
+//		  (then
+//		   (logf "Hey I just find %s that lives in %s" $person $addr))
+//			)
+func _production(evalCtx *gendsl.EvalCtx, args []gendsl.Expr, options map[string]gendsl.Value) (gendsl.Value, error) {
+	prd := grete.Production{}
+
+	// handle options
+	desc, ok := options["desc"]
+	if ok {
+		if desc.Type() != gendsl.ValueTypeString {
+			return nil, errors.Errorf("option #desc must be an string, but got %s", desc.Type())
+		}
+		prd.Desc = desc.Unwrap().(string)
 	}
 
-	Expression struct {
-		Op      string
-		Operand []any
+	if args[0].Type() != gendsl.ExprTypeIdentifier {
+		return nil, errors.Errorf("arg #1 must be an identifier, but got %s", args[0].Type())
 	}
-)
+	name := args[0].Text()
+	prd.ID = name
 
-var parserTab map[pegRule]func(*ParseContext, *node32) (any, error)
-
-func init() {
-	parserTab = map[pegRule]func(*ParseContext, *node32) (any, error){
-		ruleDefinitions:    parseDefinitions,
-		ruleDefinition:     parseDefinition,
-		ruleDefinitionBody: parseDefinitionBody,
-		ruleOptionList:     parseOptionList,
-		ruleExpression:     parseExpression,
-		ruleIdentifier:     parseIdentifier,
-		ruleOperator:       parseChild,
-		ruleLiteral:        parseChild,
-		ruleBoolLiteral:    parseBoolLiteral,
-		ruleFloatLiteral:   parseFloatLiteral,
-		ruleIntegerLiteral: parseIntegerLiteral,
-		ruleStringLiteral:  parseStringLiteral,
-		ruleKeyword:        parseNodeText,
-		ruleDefType:        parseNodeText,
-	}
-}
-
-func MakeParseContext(script string) (*ParseContext, error) {
-	parser := &PRD{
-		Buffer: script,
-		Pretty: true,
-	}
-	if err := parser.Init(); err != nil {
-		return nil, err
-	}
-	if err := parser.Parse(); err != nil {
-		return nil, err
-	}
-	return &ParseContext{
-		p:   parser,
-		env: make(map[string]any),
-	}, nil
-}
-
-func (c *ParseContext) Run() ([]*Definition, error) {
-	ast := c.p.AST()
-	v, err := c.parseNode(ast)
-	if err != nil {
-		return nil, err
-	}
-	return v.([]*Definition), nil
-}
-
-func (c *ParseContext) PrintTree() {
-	c.p.PrintSyntaxTree()
-}
-
-func (c *ParseContext) parseNode(node *node32) (any, error) {
-	parser := parserTab[node.pegRule]
-	if parser == nil {
-		panic("parser for rule " + node.pegRule.String() + " not found")
-	}
-	return parser(c, node)
-}
-
-func parseDefinitions(c *ParseContext, node *node32) (any, error) {
-	defs := make([]*Definition, 0, 2)
-	i := 0
-	node = node.up
-	for cur := node; cur != nil; cur = node.next {
-		v, err := c.parseNode(cur)
+	for _, arg := range args[1:] {
+		opt, err := arg.EvalWithEnv(definePrdtEnv)
 		if err != nil {
 			return nil, err
 		}
-		def, ok := v.(*Definition)
+		optFn, ok := opt.Unwrap().(productionOpt)
 		if !ok {
+			panic("expecting a productionOpt")
+		}
+		if err := optFn(&prd); err != nil {
 			return nil, err
 		}
-		defs = append(defs, def)
-		i++
 	}
 
-	return defs, nil
+	return &gendsl.UserData{V: prd}, nil
 }
 
-func parseDefinition(c *ParseContext, node *node32) (any, error) {
-	var (
-		ok      bool
-		id      string
-		defType string
-		defBody []any
-		options map[string]any
-	)
-	for cur := node.up; cur != nil; cur = cur.next {
-		switch cur.pegRule {
-		case ruleLPAR, ruleRPAR, ruleLBRK, ruleRBRK:
-			continue
-		}
-		v, err := c.parseNode(cur)
-		if err != nil {
-			return nil, errors.WithMessage(err, "expecting a DefType")
+type selectorGenerator struct {
+	ID types.GVIdentity
+	T  types.TypeInfo
+}
+
+var _ gendsl.Selector = (*selectorGenerator)(nil)
+
+func (s *selectorGenerator) Select(idx string) (gendsl.Value, bool) {
+	_, in := s.T.Fields[idx]
+	if !in {
+		return nil, false
+	}
+
+	return &gendsl.UserData{
+		V: &rete.Selector{
+			Alias:     s.ID,
+			AliasAttr: types.GVString(idx),
+		},
+	}, true
+}
+
+var condEnv = gendsl.NewEnv().
+	WithProcedure("eq", gendsl.Procedure{Eval: makeCond(rete.TestOpEqual, false)})
+
+func makeAliasDeclaration(t types.GValueType) gendsl.ProcedureFn {
+	//(for-int addr (eq @ > 10))
+	fn := func(evalCtx *gendsl.EvalCtx, args []gendsl.Expr, options map[string]gendsl.Value) (gendsl.Value, error) {
+		decl := rete.AliasDeclaration{
+			Type: types.TypeInfo{
+				T: t,
+			},
 		}
 
-		rule := cur.pegRule
-		switch rule {
-		case ruleDefType:
-			defType, ok = v.(string)
+		if args[0].Type() != gendsl.ExprTypeIdentifier {
+			return nil, errors.Errorf("arg #1 must be an identifier, but got %s", args[0].Type())
+		}
+		name := args[0].Text()
+		decl.Alias = types.GVIdentity(name)
+
+		for _, condExpr := range args[1:] {
+			cond, err := condExpr.EvalWithEnv(condEnv)
+			if err != nil {
+				return nil, err
+			}
+			switch v := cond.Unwrap().(type) {
+			case rete.Guard:
+				decl.Guards = append(decl.Guards, v)
+			case rete.JoinTest:
+				decl.JoinTests = append(decl.JoinTests, v)
+			}
+		}
+		return &gendsl.UserData{V: decl}, nil
+	}
+
+	return gendsl.CheckNArgs("+", fn)
+}
+
+func makeCond(op rete.TestOp, negative bool) gendsl.ProcedureFn {
+	fn := func(evalCtx *gendsl.EvalCtx, args []gendsl.Expr, options map[string]gendsl.Value) (gendsl.Value, error) {
+		var (
+			attr    types.GVString
+			isGuard = true
+			val     types.GValue
+			refer   *rete.Selector
+		)
+
+		for _, arg := range args {
+			switch arg.Type() {
+			case gendsl.ExprTypeLiteral:
+				cnst, err := arg.Eval()
+				if err != nil {
+					return nil, err
+				}
+				val = dslValueToGValue(cnst)
+			case gendsl.ExprTypeIdentifier:
+				val, err := arg.Eval()
+				if err != nil {
+					return nil, err
+				}
+				switch val.Type() {
+				case gendsl.ValueTypeString: // attr
+					attr = types.GVString(val.Unwrap().(string))
+				case gendsl.ValueTypeUserData: // identifier
+					isGuard = false
+					refer = val.Unwrap().(*rete.Selector)
+				}
+			}
+		}
+
+		if isGuard {
+			return &gendsl.UserData{
+				V: rete.Guard{
+					AliasAttr: attr,
+					Value:     val,
+					Negative:  negative,
+					TestOp:    op,
+				},
+			}, nil
+		}
+
+		return &gendsl.UserData{
+			V: rete.JoinTest{
+				XAttr:  attr,
+				Y:      *refer,
+				TestOp: op,
+			},
+		}, nil
+	}
+
+	return gendsl.CheckNArgs("2", fn)
+}
+
+var typeEnv = gendsl.NewEnv().
+	WithProcedure("for-int", gendsl.Procedure{Eval: makeAliasDeclaration(types.GValueTypeInt)}).
+	WithProcedure("for-uint", gendsl.Procedure{Eval: makeAliasDeclaration(types.GValueTypeUint)}).
+	WithProcedure("for-string", gendsl.Procedure{Eval: makeAliasDeclaration(types.GValueTypeString)}).
+	WithProcedure("for-bool", gendsl.Procedure{Eval: makeAliasDeclaration(types.GValueTypeBool)}).
+	WithProcedure("for-float", gendsl.Procedure{Eval: makeAliasDeclaration(types.GValueTypeFloat)})
+
+//	 Conditions that returns AliasDeclaration
+//			  (when
+//			    (for-struct addr (eq @addressLine1 "nowhere"))
+//			    (for-struct person (eq @name "Salaboy") )
+//			    (for-int age (eq $$ > 10) )
+//			  )
+func _when(evalCtx *gendsl.EvalCtx, args []gendsl.Expr, options map[string]gendsl.Value) (gendsl.Value, error) {
+	optFn := func(p *grete.Production) error {
+		env := typeEnv.Clone().WithString("$$", types.FieldSelf)
+		for _, arg := range args {
+			v, err := arg.EvalWithEnv(env)
+			if err != nil {
+				return err
+			}
+			alias, ok := v.Unwrap().(rete.AliasDeclaration)
 			if !ok {
-				return nil, errors.Errorf("fail to parse %s, expecting a string but got %v", rule, v)
+				panic("expecting an AliasDeclaration in when")
 			}
-		case ruleIdentifier:
-			id, ok = v.(string)
-			if !ok {
-				return nil, errors.Errorf("fail to parse %s, expecting a string but got %v", rule, v)
-			}
-			if _, in := c.env[id]; in {
-				return nil, SyntaxErrorf(c, cur, "re-define identifier %q is not allowed", id)
-			}
-		case ruleOptionList:
-			options, ok = v.(OptionList)
-			if !ok {
-				return nil, errors.Errorf("fail to parse %s, expecting a OptionList but got %v", rule, v)
-			}
-		case ruleDefinitionBody:
-			defBody, ok = v.([]any)
-			if !ok {
-				return nil, errors.Errorf("fail to parse %s", rule)
-			}
-		default:
-			// should never got here
-			return nil, SyntaxErrorf(c, cur, "invalid syntax")
+			p.When = append(p.When, alias)
+			env = env.WithUserData("$"+string(alias.Alias), &gendsl.UserData{V: &selectorGenerator{ID: alias.Alias}})
 		}
+		return nil
 	}
 
-	def := &Definition{
-		ID:      id,
-		DefType: defType,
-		Options: options,
-		Body:    defBody,
+	return &gendsl.UserData{V: productionOpt(optFn)}, nil
+}
+
+// type AliasDeclaration struct {
+// 	Alias     GVIdentity
+// 	Type      TypeInfo
+// 	Guards    []Guard    // constant test on this alias
+// 	JoinTests []JoinTest // join test on this alias and others
+// 	NJoinTest []JoinTest // negative join
+// }
+//
+
+func dslValueToGValue(val gendsl.Value) types.GValue {
+	switch val.Type() {
+	case gendsl.ValueTypeBool:
+		return types.GVBool(val.Unwrap().(bool))
+	case gendsl.ValueTypeInt:
+		return types.GVInt(val.Unwrap().(int64))
+	case gendsl.ValueTypeUInt:
+		return types.GVInt(val.Unwrap().(uint64))
+	case gendsl.ValueTypeString:
+		return types.GVString(val.Unwrap().(string))
+	case gendsl.ValueTypeFloat:
+		return types.GVFloat(val.Unwrap().(float64))
+	case gendsl.ValueTypeNil:
+		return &types.GVNil{}
 	}
-	// TODO: convert def into specify value
-	c.env[def.ID] = def
-
-	return def, nil
-}
-
-func parseDefinitionBody(c *ParseContext, node *node32) (any, error) {
-	defBody := make([]any, 0, 2)
-	for cur := node.up; cur != nil; cur = cur.next {
-		switch cur.pegRule {
-		case ruleLPAR, ruleRPAR, ruleLBRK, ruleRBRK:
-			continue
-		}
-		v, err := c.parseNode(cur)
-		if err != nil {
-			return nil, errors.WithMessage(err, "expecting a DefType")
-		}
-		defBody = append(defBody, v)
-	}
-
-	return defBody, nil
-}
-
-func parseExpression(c *ParseContext, node *node32) (any, error) {
-	var (
-		operator string
-		operands []any
-	)
-	cur := node.up
-
-	// ignore the LBRK/LPAR
-	cur = cur.next
-	if cur.pegRule != ruleOperator {
-		return nil, SyntaxErrorf(c, cur, "expecting an operator in expression, but got %s", cur.pegRule)
-	}
-	v, err := c.parseNode(cur)
-	if err != nil {
-		return nil, err
-	}
-	operator = v.(string)
-
-	// parse operands
-	for cur = cur.up; cur != nil; cur = cur.next {
-		v, err := c.parseNode(cur)
-		if err != nil {
-			return nil, err
-		}
-		operands = append(operands, v)
-	}
-
-	return &Expression{
-		Op:      operator,
-		Operand: operands,
-	}, nil
-}
-
-func parseOptionList(c *ParseContext, node *node32) (any, error) {
-	opts := make(OptionList, 2)
-	for node = node.up; node != nil; node = node.next {
-		optID, optVal, err := parseOption(c, node)
-		if err != nil {
-			return nil, err
-		}
-		opts[optID] = optVal
-	}
-	return opts, nil
-}
-
-func parseOption(c *ParseContext, node *node32) (string, any, error) {
-	var (
-		id  string
-		val any
-	)
-
-	node = node.up
-	idVal, err := c.parseNode(node)
-	if err != nil {
-		return "", nil, errors.Errorf("fail to parse option id(%q)", c.nodeText(node))
-	}
-	id = idVal.(string)
-
-	val, err = c.parseNode(node.next)
-	if err != nil {
-		return "", nil, errors.Errorf("fail to parse option val(%q) for option #:%s",
-			c.nodeText(node.next), idVal)
-	}
-	return id, val, nil
-}
-
-func parseIdentifier(c *ParseContext, node *node32) (any, error) {
-	id, err := c.readChars(node.up)
-	if err != nil {
-		return nil, err
-	}
-	return id, nil
-}
-
-func parseStringLiteral(c *ParseContext, node *node32) (any, error) {
-	unquoted, err := strconv.Unquote(c.nodeText(node))
-	if err != nil {
-		return nil, err
-	}
-	return unquoted, nil
-}
-
-func parseFloatLiteral(c *ParseContext, node *node32) (any, error) {
-	return strconv.ParseFloat(c.nodeText(node), 64)
-}
-
-func parseBoolLiteral(c *ParseContext, node *node32) (any, error) {
-	s := c.nodeText(node)
-	if s == "#t" {
-		return true, nil
-	}
-	return false, nil
-}
-
-func parseIntegerLiteral(c *ParseContext, node *node32) (any, error) {
-	text := c.nodeText(node)
-	suffix := text[len(text)-1]
-	switch suffix {
-	case 'f', 'F':
-		return strconv.ParseFloat(text[:len(text)-1], 64)
-	case 'u', 'U':
-		return strconv.ParseUint(text[:len(text)-1], 10, 64)
-	default:
-		return strconv.ParseInt(text, 10, 64)
-	}
-}
-
-func (c *ParseContext) nodeText(n *node32) string {
-	return strings.TrimSpace(string(c.p.buffer[n.begin:n.end]))
-}
-
-func (c *ParseContext) readChars(node *node32) (string, error) {
-	buf := &strings.Builder{}
-	for node.next != nil {
-		switch node.pegRule {
-		case ruleLetterOrDigit, ruleLetter:
-			buf.WriteString(c.nodeText(node))
-		default:
-			return "", SyntaxErrorf(c, node, "expecting a digit or char")
-		}
-		node = node.next
-	}
-
-	return buf.String(), nil
-}
-
-// parse whatever its child is
-func parseChild(c *ParseContext, node *node32) (any, error) {
-	return c.parseNode(node.up)
-}
-
-// parseNodeText return the text of the token node
-func parseNodeText(c *ParseContext, node *node32) (any, error) {
-	return c.nodeText(node), nil
-}
-
-func (r pegRule) String() string {
-	return rul3s[r]
-}
-
-type SyntaxError struct {
-	beginLine, endLine int
-	beginSym, endSym   int
-	cause              error
-}
-
-func (s *SyntaxError) Error() string {
-	return fmt.Sprintf("invalid syntax from line %d, symbol %d to line %d, symbol %d: %s",
-		s.beginLine, s.beginSym, s.endLine, s.endSym, s.cause)
-}
-
-func (s *SyntaxError) Unwrap() error {
-	return s.cause
-}
-
-func (s *SyntaxError) Cause() error {
-	return s.cause
-}
-
-func SyntaxErrorf(c *ParseContext, node *node32, f string, args ...any) error {
-	pos := translatePositions(c.p.buffer, []int{int(node.begin), int(node.end)})
-	beg, end := pos[int(node.begin)], pos[int(node.end)]
-
-	return &SyntaxError{
-		beginLine: beg.line,
-		endLine:   end.line,
-		beginSym:  beg.symbol,
-		endSym:    end.symbol,
-		cause:     errors.Errorf(f, args...),
-	}
+	panic("unsupported type " + val.Type().String())
 }

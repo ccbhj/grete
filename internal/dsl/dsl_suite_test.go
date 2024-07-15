@@ -1,4 +1,4 @@
-package dsl_test
+package dsl
 
 import (
 	"testing"
@@ -9,5 +9,5 @@ import (
 
 func TestDsl(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "DSL Suite")
+	RunSpecs(t, "Dsl Suite")
 }

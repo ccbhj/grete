@@ -13,6 +13,7 @@ require (
 )
 
 require (
+	github.com/ccbhj/gendsl v0.0.2-0.20240617173930-5b4d5e4a21c6
 	github.com/go-logr/logr v1.3.0 // indirect
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect

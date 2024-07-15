@@ -151,11 +151,11 @@ type (
 	// AlphaMem store those WMEs that passes constant test
 	AlphaMem struct {
 		typeInfo       TypeInfo
-		guards         []Guard
 		inputAlphaNode AlphaNode
 		items          set[*WME]                    // wmes that passed tests of ConstantTestNode
 		successors     *list.List[alphaMemSuccesor] // must be ordered, see Figure 2.5 in paper 2.4
 		an             *AlphaNetwork                // which AlphaNetwork this mem belong to
+		guards         []Guard
 	}
 )
 

@@ -14,12 +14,12 @@ type (
 	// Token stores WMEs that match guards or join test
 	Token struct {
 		parent *Token
-		level  int
 		wme    *WME // dummy node if wme == nil
 
 		node         ReteNode // point to the memory that the token's in
 		children     set[*Token]
 		nJoinResults set[*negativeJoinResult] // used only on tokens in negative nodes
+		level        int
 		// nccResult *list.List[*Token] // similar to JoinNode but used only in NCC node
 		// Owner *Token // on tokens in NCC partner: token in whose nccResult this result reside
 	}
@@ -211,11 +211,11 @@ type (
 	// that means JoinNode is usually the parent of a beta memory(beta memory store the results of JoinNode)
 	JoinNode struct {
 		ReteNode
-		tests     []*TestAtJoinNode
-		testSum   uint64
 		amem      *AlphaMem
 		outputMem *BetaMem // one of then children, for speeding up the construction
 		bn        *BetaNetwork
+		tests     []*TestAtJoinNode
+		testSum   uint64
 	}
 )
 
@@ -251,7 +251,7 @@ func (t TestAtJoinNode) performTest(x, y *WME) (bool, error) {
 	return testFn(xv, yv)
 }
 
-func buildJoinTestFromConds(thisAlias GVIdentity, jt JoinTest, bmOffset map[GVIdentity]int, nbm int) *TestAtJoinNode {
+func buildJoinTestFromConds(jt JoinTest, bmOffset map[GVIdentity]int, nbm int) *TestAtJoinNode {
 	offset, in := bmOffset[jt.Y.Alias]
 	if !in {
 		// "TODO: handle error"
@@ -455,10 +455,10 @@ type (
 		// function of BetaMem and JoinNode are combined together
 		items     set[*Token] // just like the BetaMem
 		amem      *AlphaMem   // just like the JoinNode
+		outputMem *BetaMem    // output beta mem, for speeding up buildOrShareBetaMem
+		bn        *BetaNetwork
 		tests     []*TestAtJoinNode
 		testSum   uint64
-		outputMem *BetaMem // output beta mem, for speeding up buildOrShareBetaMem
-		bn        *BetaNetwork
 		// nearestAncestorWithSameAmem ReteNode
 		// rightUnlinked               bool
 	}
@@ -625,7 +625,7 @@ func (bn *BetaNetwork) buildOrShareNetwork(parent ReteNode, aliasDecls []AliasDe
 		} else {
 			// build join node for each join test
 			for _, jt := range decl.JoinTests {
-				jn := buildJoinTestFromConds(decl.Alias, jt, aliasOrders, nbm)
+				jn := buildJoinTestFromConds(jt, aliasOrders, nbm)
 				currentNode = bn.buildOrShareBetaMem(currentNode)
 				currentNode = bn.buildOrShareJoinNode(currentNode, am, []*TestAtJoinNode{jn})
 				nbm++
@@ -633,7 +633,7 @@ func (bn *BetaNetwork) buildOrShareNetwork(parent ReteNode, aliasDecls []AliasDe
 		}
 
 		for _, jt := range decl.NJoinTest {
-			jn := buildJoinTestFromConds(decl.Alias, jt, aliasOrders, nbm)
+			jn := buildJoinTestFromConds(jt, aliasOrders, nbm)
 			currentNode = bn.buildOrShareNegativeNode(currentNode, am, []*TestAtJoinNode{jn})
 			// negative join test don't produce new token
 		}
@@ -795,9 +795,9 @@ type AliasDeclaration struct {
 }
 
 type Production struct {
+	Then any // TODO: define and handle rhs
 	ID   string
 	When []AliasDeclaration
-	Then any // TODO: define and handle rhs
 }
 
 // AddProduction add an production and register its unique id

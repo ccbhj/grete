@@ -1,3 +1,11 @@
+github.com/ccbhj/gendsl v0.0.1 h1:VKThcLVf5hZdWQB8C2oA7/IHOKM3lE9mzgI/MXiKy0Y=
+github.com/ccbhj/gendsl v0.0.1/go.mod h1:6gtwdKS/ZxILPshWVoOFZUQW67xJhMVPCRw1YXkpzDU=
+github.com/ccbhj/gendsl v0.0.2-0.20240611163552-eaa5a09d6114 h1:+4p+7lh0xTJX+ddHIbyAhL0H4lUBCYwLZk/jeKEm+NA=
+github.com/ccbhj/gendsl v0.0.2-0.20240611163552-eaa5a09d6114/go.mod h1:6gtwdKS/ZxILPshWVoOFZUQW67xJhMVPCRw1YXkpzDU=
+github.com/ccbhj/gendsl v0.0.2-0.20240617170742-5a640221e1c4 h1:zE2wR3ZLkyw+/Y7WLebuHeDWsBXvszjJnuvF3V9QukQ=
+github.com/ccbhj/gendsl v0.0.2-0.20240617170742-5a640221e1c4/go.mod h1:6gtwdKS/ZxILPshWVoOFZUQW67xJhMVPCRw1YXkpzDU=
+github.com/ccbhj/gendsl v0.0.2-0.20240617173930-5b4d5e4a21c6 h1:dz99QfvfuKKTO9rAa85m5tHi8d8PaOLWkeLU02VoaKo=
+github.com/ccbhj/gendsl v0.0.2-0.20240617173930-5b4d5e4a21c6/go.mod h1:6gtwdKS/ZxILPshWVoOFZUQW67xJhMVPCRw1YXkpzDU=
 github.com/chzyer/logex v1.1.10/go.mod h1:+Ywpsq7O8HXn0nuIou7OrIPyXbp3wmkHB+jjWRnGsAI=
 github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e/go.mod h1:nSuG5e5PlCu98SY8svDHJxuZscDgtXS6KTTbou5AhLI=
 github.com/chzyer/test v0.0.0-20180213035817-a1ea475d72b1/go.mod h1:Q3SI9o4m/ZMnBNeIyt5eFwwo7qiLfzFZmjNmxjkiQlU=
