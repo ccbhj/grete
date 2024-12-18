@@ -4,8 +4,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	. "github.com/ccbhj/grete/internal/rete"
-	. "github.com/ccbhj/grete/internal/types"
+	. "github.com/ccbhj/grete/rete"
+	. "github.com/ccbhj/grete/types"
 )
 
 var _ = Describe("Cond", func() {

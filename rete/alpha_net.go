@@ -7,8 +7,8 @@ import (
 
 	"github.com/zyedidia/generic/list"
 
-	"github.com/ccbhj/grete/internal/log"
-	. "github.com/ccbhj/grete/internal/types"
+	"github.com/ccbhj/grete/log"
+	. "github.com/ccbhj/grete/types"
 )
 
 type (

@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/ccbhj/grete/internal/dsl"
+	"github.com/ccbhj/grete/dsl"
 )
 
 func main() {

@@ -9,7 +9,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/zyedidia/generic/list"
 
-	. "github.com/ccbhj/grete/internal/types"
+	. "github.com/ccbhj/grete/types"
 )
 
 type set[T comparable] map[T]struct{}

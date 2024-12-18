@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/samber/lo"
 
-	. "github.com/ccbhj/grete/internal/types"
+	. "github.com/ccbhj/grete/types"
 )
 
 type Chess struct {

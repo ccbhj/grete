@@ -7,8 +7,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 
-	"github.com/ccbhj/grete/internal/log"
-	. "github.com/ccbhj/grete/internal/types"
+	"github.com/ccbhj/grete/log"
+	. "github.com/ccbhj/grete/types"
 )
 
 type (

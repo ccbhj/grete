@@ -3,7 +3,7 @@ package rete
 import (
 	"github.com/pkg/errors"
 
-	. "github.com/ccbhj/grete/internal/types"
+	. "github.com/ccbhj/grete/types"
 )
 
 type (
